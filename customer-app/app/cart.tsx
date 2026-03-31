@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { StatusBar } from "expo-status-bar";
 import { useRouter, useSegments } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Animated, Easing, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -13,6 +13,7 @@ import {
 } from "@/lib/cart-store";
 import { useAuthStore } from "@/lib/auth-store";
 import { dummyRestaurants } from "@/lib/customer-data";
+import { useOrderQuoteQuery } from "@/lib/order-queries";
 import { useUIStore } from "@/lib/ui-store";
 
 export default function CartScreen() {
@@ -44,6 +45,94 @@ export default function CartScreen() {
   const insideTabs = segments[0] === "(tabs)";
   const tabBarClearance = insideTabs ? 104 : 14;
   const breakdown = getCartBreakdown({ items, couponDiscountTk, thresholdOffer });
+  const quotePayload = useMemo(
+    () => ({
+      restaurantId: restaurantId ?? "",
+      items: cartItems
+        .slice()
+        .sort((left, right) => left.cartKey.localeCompare(right.cartKey))
+        .map((item) => ({
+          itemId: item.itemId,
+          quantity: item.quantity,
+          unitTk: item.unitTk,
+          summary: item.summary,
+        })),
+      couponCode: appliedCoupon,
+    }),
+    [appliedCoupon, cartItems, restaurantId],
+  );
+  const deferredQuotePayload = useDeferredValue(quotePayload);
+  const {
+    data: quote,
+    error: quoteError,
+    isFetching: isQuoteFetching,
+  } = useOrderQuoteQuery(
+    deferredQuotePayload,
+    Boolean(restaurantId && deferredQuotePayload.items.length > 0),
+  );
+  const localThresholdOffer = useMemo(
+    () =>
+      !appliedCoupon && breakdown.thresholdReached
+        ? {
+            type: "threshold_discount",
+            title: "Restaurant offer",
+            shortLabel: `TK ${breakdown.thresholdDiscountValueTk} OFF`,
+            code: "",
+            discountTk: breakdown.thresholdDiscountTk,
+            freeDeliveryApplied: false,
+            isAutoApply: true,
+          }
+        : undefined,
+    [
+      appliedCoupon,
+      breakdown.thresholdDiscountTk,
+      breakdown.thresholdDiscountValueTk,
+      breakdown.thresholdReached,
+    ],
+  );
+  const pricing = useMemo(() => {
+    const shouldPreferLocalThreshold =
+      !appliedCoupon &&
+      breakdown.thresholdReached &&
+      (quote?.discountTk ?? 0) < breakdown.thresholdDiscountTk;
+
+    if (shouldPreferLocalThreshold) {
+      return {
+        subtotalTk: breakdown.subtotalTk,
+        deliveryTk: breakdown.deliveryTk,
+        serviceFeeTk: breakdown.serviceFeeTk,
+        discountTk: breakdown.discountTk,
+        totalTk: breakdown.totalTk,
+        couponCode: null,
+        appliedOffer: localThresholdOffer,
+      };
+    }
+
+    return (
+      quote ?? {
+        subtotalTk: breakdown.subtotalTk,
+        deliveryTk: breakdown.deliveryTk,
+        serviceFeeTk: breakdown.serviceFeeTk,
+        discountTk: breakdown.discountTk,
+        totalTk: breakdown.totalTk,
+        couponCode: appliedCoupon,
+        appliedOffer: localThresholdOffer,
+      }
+    );
+  }, [
+    appliedCoupon,
+    breakdown.deliveryTk,
+    breakdown.discountTk,
+    breakdown.serviceFeeTk,
+    breakdown.subtotalTk,
+    breakdown.thresholdDiscountTk,
+    breakdown.thresholdReached,
+    breakdown.totalTk,
+    localThresholdOffer,
+    quote,
+  ]);
+  const appliedOffer = pricing.appliedOffer;
+  const offerLineLabel = appliedOffer?.title || "Offer";
   const thresholdProgress = Math.min(
     breakdown.thresholdEnabled && breakdown.thresholdTargetTk > 0
       ? breakdown.subtotalTk / breakdown.thresholdTargetTk
@@ -169,17 +258,17 @@ export default function CartScreen() {
               <Text style={styles.summaryMeta}>
                 {restaurant?.cuisine ?? "Restaurant"} | {restaurant?.deliveryTime ?? "Fast delivery"}
               </Text>
-              <Text style={styles.summaryText}>
-                {restaurant?.voucher
-                  ? `${restaurant.voucher} available on selected orders`
-                  : "Review your order before checkout."}
-              </Text>
+                <Text style={styles.summaryText}>
+                  {restaurant?.voucher
+                    ? `${restaurant.voucher} available on selected orders`
+                    : "Review your order before checkout."}
+                </Text>
             </View>
           </View>
           <View style={styles.summaryBottomRow}>
-            <Text style={styles.summaryAmount}>TK {breakdown.totalTk}</Text>
+            <Text style={styles.summaryAmount}>TK {pricing.totalTk}</Text>
             <Text style={styles.summaryMiniText}>
-              Cart from {restaurantName}
+              {isQuoteFetching ? "Checking latest total..." : `Cart from ${restaurantName}`}
             </Text>
           </View>
         </View>
@@ -336,7 +425,14 @@ export default function CartScreen() {
           </View>
           {appliedCoupon ? (
             <Text style={styles.couponAppliedText}>
-              Applied: {appliedCoupon} | Saved TK {couponDiscountTk}
+              Applied: {appliedCoupon}
+            </Text>
+          ) : null}
+          {quoteError ? (
+            <Text style={styles.couponErrorText}>
+              {quoteError instanceof Error
+                ? quoteError.message
+                : "Coupon or offer could not be verified right now."}
             </Text>
           ) : null}
         </View>
@@ -345,35 +441,25 @@ export default function CartScreen() {
           <Text style={styles.billHeading}>Payment summary</Text>
           <View style={styles.billRow}>
             <Text style={styles.billLabel}>Items</Text>
-            <Text style={styles.billValue}>TK {breakdown.subtotalTk}</Text>
+            <Text style={styles.billValue}>TK {pricing.subtotalTk}</Text>
           </View>
           <View style={styles.billRow}>
             <Text style={styles.billLabel}>Delivery</Text>
-            <Text style={styles.billValue}>TK {breakdown.deliveryTk}</Text>
+            <Text style={styles.billValue}>TK {pricing.deliveryTk}</Text>
           </View>
           <View style={styles.billRow}>
             <Text style={styles.billLabel}>Service fee</Text>
-            <Text style={styles.billValue}>TK {breakdown.serviceFeeTk}</Text>
+            <Text style={styles.billValue}>TK {pricing.serviceFeeTk}</Text>
           </View>
-          <View style={styles.billRow}>
-            <Text style={styles.billLabel}>Discount</Text>
-            <Text style={styles.billValue}>-TK {breakdown.discountTk}</Text>
-          </View>
-          {breakdown.thresholdDiscountTk > 0 ? (
+          {pricing.discountTk > 0 ? (
             <View style={styles.billRow}>
-              <Text style={styles.billLabel}>Threshold offer</Text>
-              <Text style={styles.billValue}>-TK {breakdown.thresholdDiscountTk}</Text>
-            </View>
-          ) : null}
-          {breakdown.couponDiscountTk > 0 ? (
-            <View style={styles.billRow}>
-              <Text style={styles.billLabel}>Coupon</Text>
-              <Text style={styles.billValue}>-TK {breakdown.couponDiscountTk}</Text>
+              <Text style={styles.billLabel}>{offerLineLabel}</Text>
+              <Text style={styles.billValue}>-TK {pricing.discountTk}</Text>
             </View>
           ) : null}
           <View style={[styles.billRow, styles.billStrongRow]}>
             <Text style={styles.billStrongLabel}>Total</Text>
-            <Text style={styles.billStrongValue}>TK {breakdown.totalTk}</Text>
+            <Text style={styles.billStrongValue}>TK {pricing.totalTk}</Text>
           </View>
         </View>
 
@@ -429,6 +515,15 @@ export default function CartScreen() {
               return;
             }
 
+            if (quoteError) {
+              showToast(
+                quoteError instanceof Error
+                  ? quoteError.message
+                  : "Please review your cart before checkout.",
+              );
+              return;
+            }
+
             router.push("/checkout");
           }}
         >
@@ -437,7 +532,7 @@ export default function CartScreen() {
             <Text style={styles.checkoutButtonSub}>{restaurantName}</Text>
           </View>
           <View style={styles.checkoutAmountPill}>
-            <Text style={styles.checkoutAmountText}>TK {breakdown.totalTk}</Text>
+            <Text style={styles.checkoutAmountText}>TK {pricing.totalTk}</Text>
           </View>
         </Pressable>
       </View>
@@ -531,6 +626,7 @@ const styles = StyleSheet.create({
   couponButton: { minWidth: 88, minHeight: 52, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: "#5C7CFA" },
   couponButtonText: { fontSize: 14, fontWeight: "800", color: "#FFFFFF" },
   couponAppliedText: { fontSize: 12, fontWeight: "700", color: "#2FBF71" },
+  couponErrorText: { fontSize: 12, lineHeight: 18, color: "#D14D72" },
   billCard: { borderRadius: 24, padding: 18, backgroundColor: "#FFF1E8", gap: 12 },
   billHeading: { fontSize: 18, fontWeight: "900", color: "#20263A" },
   billRow: { flexDirection: "row", justifyContent: "space-between", gap: 12 },

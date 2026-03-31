@@ -18,11 +18,22 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { FavoriteButton } from "@/components/favorite-button";
 import {
-  dummyRestaurants,
+  CategoryRailSkeleton,
+  PromoRailSkeleton,
+  QuickPicksSkeleton,
+} from "@/components/content-skeletons";
+import {
+  RestaurantCardListSkeleton,
+  RestaurantRailSkeleton,
+} from "@/components/restaurant-skeletons";
+import { useSelectDeliveryLocationMutation } from "@/lib/address-queries";
+import { useAuthStore } from "@/lib/auth-store";
+import {
   dummyCategories,
   dummyHomePromos,
   dummyHomeQuickPicks,
 } from "@/lib/customer-data";
+import { useHomeContentQuery } from "@/lib/content-queries";
 import { getCartCount, useCartStore } from "@/lib/cart-store";
 import {
   type DeliveryLocation,
@@ -32,11 +43,10 @@ import {
 } from "@/lib/location-store";
 import {
   formatDistanceKm,
-  getFeaturedRestaurants,
-  getNearbyRestaurants,
   getRestaurantDistanceKm,
-  getVoucherRestaurants,
 } from "@/lib/restaurant-utils";
+import { useRestaurantsQuery } from "@/lib/restaurant-queries";
+import { useUIStore } from "@/lib/ui-store";
 
 const divisionShortNames = [
   { match: "dhaka", short: "DHK" },
@@ -65,9 +75,21 @@ function getShortLocationMeta(location: DeliveryLocation) {
 
 export default function HomeScreen() {
   const router = useRouter();
+  const user = useAuthStore((state) => state.user);
+  const showToast = useUIStore((state) => state.showToast);
   const { width } = useWindowDimensions();
   const selectedLocation = useDeliveryLocation();
   const savedLocations = useSavedLocations();
+  const selectDeliveryLocationMutation = useSelectDeliveryLocationMutation();
+  const { data: homeContent, isLoading: homeContentLoading } = useHomeContentQuery();
+  const { data: nearbyRestaurantData, isLoading: restaurantsLoading } =
+    useRestaurantsQuery({
+      lat: selectedLocation.latitude,
+      lng: selectedLocation.longitude,
+      radiusKm: 3,
+      limit: 50,
+      sort: "nearest",
+    });
   const [locationSheetVisible, setLocationSheetVisible] = useState(false);
 
   const reveal = useRef(new Animated.Value(0)).current;
@@ -75,34 +97,15 @@ export default function HomeScreen() {
   const sheetTranslateY = useRef(new Animated.Value(460)).current;
   const sheetBackdrop = useRef(new Animated.Value(0)).current;
 
+  const nearbyRestaurants = useMemo(
+    () => nearbyRestaurantData ?? [],
+    [nearbyRestaurantData],
+  );
   const featuredRestaurants = useMemo(
     () =>
-      getFeaturedRestaurants({
-        restaurants: dummyRestaurants,
-        latitude: selectedLocation.latitude,
-        longitude: selectedLocation.longitude,
-        limit: 6,
-      }).map((restaurant) => ({
-        restaurant,
-        distanceText: formatDistanceKm(
-          getRestaurantDistanceKm({
-            restaurant,
-            latitude: selectedLocation.latitude,
-            longitude: selectedLocation.longitude,
-          }),
-        ),
-      })),
-    [selectedLocation.latitude, selectedLocation.longitude],
-  );
-  const quickRestaurants = useMemo(
-    () =>
-      getNearbyRestaurants({
-        restaurants: dummyRestaurants,
-        latitude: selectedLocation.latitude,
-        longitude: selectedLocation.longitude,
-        radiusKm: 3,
-      })
-        .slice(0, 8)
+      nearbyRestaurants
+        .filter((restaurant) => restaurant.featured)
+        .slice(0, 6)
         .map((restaurant) => ({
           restaurant,
           distanceText: formatDistanceKm(
@@ -113,16 +116,15 @@ export default function HomeScreen() {
             }),
           ),
         })),
-    [selectedLocation.latitude, selectedLocation.longitude],
+    [
+      nearbyRestaurants,
+      selectedLocation.latitude,
+      selectedLocation.longitude,
+    ],
   );
-  const voucherRestaurants = useMemo(
+  const quickRestaurants = useMemo(
     () =>
-      getVoucherRestaurants({
-        restaurants: dummyRestaurants,
-        latitude: selectedLocation.latitude,
-        longitude: selectedLocation.longitude,
-        limit: 6,
-      }).map((restaurant) => ({
+      nearbyRestaurants.slice(0, 8).map((restaurant) => ({
         restaurant,
         distanceText: formatDistanceKm(
           getRestaurantDistanceKm({
@@ -132,7 +134,32 @@ export default function HomeScreen() {
           }),
         ),
       })),
-    [selectedLocation.latitude, selectedLocation.longitude],
+    [
+      nearbyRestaurants,
+      selectedLocation.latitude,
+      selectedLocation.longitude,
+    ],
+  );
+  const voucherRestaurants = useMemo(
+    () =>
+      nearbyRestaurants
+        .filter((restaurant) => Boolean(restaurant.voucher))
+        .slice(0, 6)
+        .map((restaurant) => ({
+          restaurant,
+          distanceText: formatDistanceKm(
+            getRestaurantDistanceKm({
+              restaurant,
+              latitude: selectedLocation.latitude,
+              longitude: selectedLocation.longitude,
+            }),
+          ),
+        })),
+    [
+      nearbyRestaurants,
+      selectedLocation.latitude,
+      selectedLocation.longitude,
+    ],
   );
   const promoCardWidth = Math.min(width - 72, 286);
   const promoSnap = promoCardWidth + 14;
@@ -141,7 +168,10 @@ export default function HomeScreen() {
     [selectedLocation],
   );
   const cartCount = useCartStore((state) => getCartCount(state.items));
-  const hasNearbyRestaurants = quickRestaurants.length > 0;
+  const hasNearbyRestaurants = quickRestaurants.length > 0 || restaurantsLoading;
+  const homeCategories = homeContent?.categories ?? dummyCategories;
+  const homePromos = homeContent?.promos ?? dummyHomePromos;
+  const homeQuickPicks = homeContent?.quickPicks ?? dummyHomeQuickPicks;
 
   useEffect(() => {
     Animated.timing(reveal, {
@@ -188,6 +218,35 @@ export default function HomeScreen() {
         onClosed?.();
       }
     });
+  };
+
+  const handleSelectLocation = async (
+    location: (typeof savedLocations)[number],
+  ) => {
+    const previousLocation = selectedLocation;
+    setDeliveryLocation(location);
+    closeSheet();
+
+    if (!user) {
+      return;
+    }
+
+    try {
+      await selectDeliveryLocationMutation.mutateAsync({
+        addressId: location.id,
+        label: location.label,
+        subtitle: location.subtitle,
+        latitude: location.latitude,
+        longitude: location.longitude,
+      });
+    } catch (error) {
+      setDeliveryLocation(previousLocation);
+      showToast(
+        error instanceof Error
+          ? error.message
+          : "Unable to update delivery location.",
+      );
+    }
   };
 
   return (
@@ -242,14 +301,18 @@ export default function HomeScreen() {
 
           <Text style={styles.heroTitle}>What are you craving?</Text>
 
-          <View style={styles.quickPickRow}>
-            {dummyHomeQuickPicks.map((pick) => (
-              <View key={pick.id} style={[styles.quickPickChip, { backgroundColor: pick.color }]}>
-                <Ionicons name={pick.icon as never} size={14} color="#20263A" />
-                <Text style={styles.quickPickText}>{pick.label}</Text>
-              </View>
-            ))}
-          </View>
+          {homeContentLoading ? (
+            <QuickPicksSkeleton />
+          ) : (
+            <View style={styles.quickPickRow}>
+              {homeQuickPicks.map((pick) => (
+                <View key={pick.id} style={[styles.quickPickChip, { backgroundColor: pick.color }]}>
+                  <Ionicons name={pick.icon as never} size={14} color="#20263A" />
+                  <Text style={styles.quickPickText}>{pick.label}</Text>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
         {hasNearbyRestaurants ? (
@@ -259,91 +322,99 @@ export default function HomeScreen() {
               action="See all"
               onPress={() => router.push("/categories")}
             />
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.categoryRail}
-            >
-              {dummyCategories.map((category) => (
-                <Pressable
-                  key={category.id}
-                  style={styles.categoryCard}
-                  onPress={() =>
-                    router.push({
-                      pathname: "/search-results",
-                      params: { q: category.label, filter: "all" },
-                    })
-                  }
-                >
-                  <View style={[styles.categoryIconWrap, { backgroundColor: category.accent }]}>
-                    <Ionicons name={category.icon as never} size={22} color="#1C2335" />
-                  </View>
-                  <Text style={styles.categoryLabel}>{category.label}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
+            {homeContentLoading ? (
+              <CategoryRailSkeleton />
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.categoryRail}
+              >
+                {homeCategories.map((category) => (
+                  <Pressable
+                    key={category.id}
+                    style={styles.categoryCard}
+                    onPress={() =>
+                      router.push({
+                        pathname: "/search-results",
+                        params: { q: category.label, filter: "all" },
+                      })
+                    }
+                  >
+                    <View style={[styles.categoryIconWrap, { backgroundColor: category.accent }]}>
+                      <Ionicons name={category.icon as never} size={22} color="#1C2335" />
+                    </View>
+                    <Text style={styles.categoryLabel}>{category.label}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
 
             <SectionHeader
               title="Hot deals"
               action="More"
               onPress={() => router.push("/offers")}
             />
-            <Animated.ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              decelerationRate="fast"
-              snapToInterval={promoSnap}
-              disableIntervalMomentum
-              snapToAlignment="start"
-              contentContainerStyle={styles.promoRail}
-              onScroll={Animated.event(
-                [{ nativeEvent: { contentOffset: { x: promoScrollX } } }],
-                { useNativeDriver: false },
-              )}
-              scrollEventThrottle={16}
-            >
-              {dummyHomePromos.map((promo, index) => {
-                const inputRange = [
-                  (index - 1) * promoSnap,
-                  index * promoSnap,
-                  (index + 1) * promoSnap,
-                ];
-                const scale = promoScrollX.interpolate({
-                  inputRange,
-                  outputRange: [0.96, 1, 0.96],
-                  extrapolate: "clamp",
-                });
+            {homeContentLoading ? (
+              <PromoRailSkeleton />
+            ) : (
+              <Animated.ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                decelerationRate="fast"
+                snapToInterval={promoSnap}
+                disableIntervalMomentum
+                snapToAlignment="start"
+                contentContainerStyle={styles.promoRail}
+                onScroll={Animated.event(
+                  [{ nativeEvent: { contentOffset: { x: promoScrollX } } }],
+                  { useNativeDriver: false },
+                )}
+                scrollEventThrottle={16}
+              >
+                {homePromos.map((promo, index) => {
+                  const inputRange = [
+                    (index - 1) * promoSnap,
+                    index * promoSnap,
+                    (index + 1) * promoSnap,
+                  ];
+                  const scale = promoScrollX.interpolate({
+                    inputRange,
+                    outputRange: [0.96, 1, 0.96],
+                    extrapolate: "clamp",
+                  });
 
-                return (
-                  <Animated.View
-                    key={promo.id}
-                    style={[
-                      styles.promoCard,
-                      {
-                        width: promoCardWidth,
-                        backgroundColor: promo.bg,
-                        transform: [{ scale }],
-                      },
-                    ]}
-                  >
-                    <Pressable
-                      style={styles.promoPressable}
-                      onPress={() =>
-                        router.push({
-                          pathname: "/offer/[id]",
-                          params: { id: promo.id },
-                        })
-                      }
+                  return (
+                    <Animated.View
+                      key={promo.id}
+                      style={[
+                        styles.promoCard,
+                        {
+                          width: promoCardWidth,
+                          backgroundColor: promo.bg,
+                          transform: [{ scale }],
+                        },
+                      ]}
                     >
-                      <View style={[styles.promoGlowLarge, { backgroundColor: promo.glow }]} />
-                      <View style={styles.promoGlowSmall} />
-                      <Text style={styles.promoTitle}>{promo.title}</Text>
-                      <Text style={styles.promoNote}>{promo.note}</Text>
-                    </Pressable>
-                  </Animated.View>
-                );
-              })}
-            </Animated.ScrollView>
+                      <Pressable
+                        style={styles.promoPressable}
+                        onPress={() =>
+                          router.push({
+                            pathname: "/offer/[id]",
+                            params: { id: promo.id },
+                          })
+                        }
+                      >
+                        <View style={[styles.promoGlowLarge, { backgroundColor: promo.glow }]} />
+                        <View style={styles.promoGlowSmall} />
+                        <Text style={styles.promoTitle}>{promo.title}</Text>
+                        <Text style={styles.promoNote}>{promo.note}</Text>
+                      </Pressable>
+                    </Animated.View>
+                  );
+                })}
+              </Animated.ScrollView>
+            )}
 
             <SectionHeader
               title="Featured"
@@ -355,58 +426,62 @@ export default function HomeScreen() {
                 })
               }
             />
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.featuredRail}
-            >
-              {featuredRestaurants.map(({ restaurant, distanceText }) => (
-                <View
-                  key={restaurant.id}
-                  style={[styles.featuredCard, { width: width * 0.72 }]}
-                >
-                  <Pressable
-                    style={styles.restaurantCardPressable}
-                    onPress={() =>
-                      router.push({
-                        pathname: "/restaurant/[id]",
-                        params: { id: restaurant.id },
-                      })
-                    }
+            {restaurantsLoading ? (
+              <RestaurantRailSkeleton />
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.featuredRail}
+              >
+                {featuredRestaurants.map(({ restaurant, distanceText }) => (
+                  <View
+                    key={restaurant.id}
+                    style={[styles.featuredCard, { width: width * 0.72 }]}
                   >
-                    <Image
-                      source={{ uri: restaurant.coverImage }}
-                      style={styles.featuredImage}
-                      contentFit="cover"
-                    />
-                    <View style={styles.featuredBody}>
-                      <View style={styles.featuredTopRow}>
-                        <Text style={styles.featuredName}>{restaurant.name}</Text>
-                        <View style={styles.ratingPill}>
-                          <Ionicons name="star" size={12} color="#F29D18" />
-                          <Text style={styles.ratingPillText}>
-                            {restaurant.rating.toFixed(1)}
-                          </Text>
+                    <Pressable
+                      style={styles.restaurantCardPressable}
+                      onPress={() =>
+                        router.push({
+                          pathname: "/restaurant/[id]",
+                          params: { id: restaurant.id },
+                        })
+                      }
+                    >
+                      <Image
+                        source={{ uri: restaurant.coverImage }}
+                        style={styles.featuredImage}
+                        contentFit="cover"
+                      />
+                      <View style={styles.featuredBody}>
+                        <View style={styles.featuredTopRow}>
+                          <Text style={styles.featuredName}>{restaurant.name}</Text>
+                          <View style={styles.ratingPill}>
+                            <Ionicons name="star" size={12} color="#F29D18" />
+                            <Text style={styles.ratingPillText}>
+                              {restaurant.rating.toFixed(1)}
+                            </Text>
+                          </View>
                         </View>
+                        <Text style={styles.featuredMeta}>
+                          {restaurant.cuisine} | {restaurant.deliveryTime} | {distanceText}
+                        </Text>
+                        {restaurant.voucher ? (
+                          <View style={styles.homeVoucherPill}>
+                            <Ionicons name="ticket-outline" size={11} color="#FF5D8F" />
+                            <Text style={styles.homeVoucherText}>{restaurant.voucher}</Text>
+                          </View>
+                        ) : null}
                       </View>
-                      <Text style={styles.featuredMeta}>
-                        {restaurant.cuisine} | {restaurant.deliveryTime} | {distanceText}
-                      </Text>
-                      {restaurant.voucher ? (
-                        <View style={styles.homeVoucherPill}>
-                          <Ionicons name="ticket-outline" size={11} color="#FF5D8F" />
-                          <Text style={styles.homeVoucherText}>{restaurant.voucher}</Text>
-                        </View>
-                      ) : null}
-                    </View>
-                  </Pressable>
-                  <FavoriteButton
-                    restaurantId={restaurant.id}
-                    style={styles.cardFavoriteButton}
-                  />
-                </View>
-              ))}
-            </ScrollView>
+                    </Pressable>
+                    <FavoriteButton
+                      restaurantId={restaurant.id}
+                      style={styles.cardFavoriteButton}
+                    />
+                  </View>
+                ))}
+              </ScrollView>
+            )}
 
             {voucherRestaurants.length > 0 ? (
               <>
@@ -420,58 +495,62 @@ export default function HomeScreen() {
                     })
                   }
                 />
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.featuredRail}
-                >
-                  {voucherRestaurants.map(({ restaurant, distanceText }) => (
-                    <View
-                      key={restaurant.id}
-                      style={[styles.featuredCard, { width: width * 0.72 }]}
-                    >
-                      <Pressable
-                        style={styles.restaurantCardPressable}
-                        onPress={() =>
-                          router.push({
-                            pathname: "/restaurant/[id]",
-                            params: { id: restaurant.id },
-                          })
-                        }
+                {restaurantsLoading ? (
+                  <RestaurantRailSkeleton />
+                ) : (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.featuredRail}
+                  >
+                    {voucherRestaurants.map(({ restaurant, distanceText }) => (
+                      <View
+                        key={restaurant.id}
+                        style={[styles.featuredCard, { width: width * 0.72 }]}
                       >
-                        <Image
-                          source={{ uri: restaurant.coverImage }}
-                          style={styles.featuredImage}
-                          contentFit="cover"
-                        />
-                        <View style={styles.featuredBody}>
-                          <View style={styles.featuredTopRow}>
-                            <Text style={styles.featuredName}>{restaurant.name}</Text>
-                            <View style={styles.ratingPill}>
-                              <Ionicons name="star" size={12} color="#F29D18" />
-                              <Text style={styles.ratingPillText}>
-                                {restaurant.rating.toFixed(1)}
-                              </Text>
+                        <Pressable
+                          style={styles.restaurantCardPressable}
+                          onPress={() =>
+                            router.push({
+                              pathname: "/restaurant/[id]",
+                              params: { id: restaurant.id },
+                            })
+                          }
+                        >
+                          <Image
+                            source={{ uri: restaurant.coverImage }}
+                            style={styles.featuredImage}
+                            contentFit="cover"
+                          />
+                          <View style={styles.featuredBody}>
+                            <View style={styles.featuredTopRow}>
+                              <Text style={styles.featuredName}>{restaurant.name}</Text>
+                              <View style={styles.ratingPill}>
+                                <Ionicons name="star" size={12} color="#F29D18" />
+                                <Text style={styles.ratingPillText}>
+                                  {restaurant.rating.toFixed(1)}
+                                </Text>
+                              </View>
                             </View>
+                            <Text style={styles.featuredMeta}>
+                              {restaurant.cuisine} | {restaurant.deliveryTime} | {distanceText}
+                            </Text>
+                            {restaurant.voucher ? (
+                              <View style={styles.homeVoucherPill}>
+                                <Ionicons name="ticket-outline" size={11} color="#FF5D8F" />
+                                <Text style={styles.homeVoucherText}>{restaurant.voucher}</Text>
+                              </View>
+                            ) : null}
                           </View>
-                          <Text style={styles.featuredMeta}>
-                            {restaurant.cuisine} | {restaurant.deliveryTime} | {distanceText}
-                          </Text>
-                          {restaurant.voucher ? (
-                            <View style={styles.homeVoucherPill}>
-                              <Ionicons name="ticket-outline" size={11} color="#FF5D8F" />
-                              <Text style={styles.homeVoucherText}>{restaurant.voucher}</Text>
-                            </View>
-                          ) : null}
-                        </View>
-                      </Pressable>
-                      <FavoriteButton
-                        restaurantId={restaurant.id}
-                        style={styles.cardFavoriteButton}
-                      />
-                    </View>
-                  ))}
-                </ScrollView>
+                        </Pressable>
+                        <FavoriteButton
+                          restaurantId={restaurant.id}
+                          style={styles.cardFavoriteButton}
+                        />
+                      </View>
+                    ))}
+                  </ScrollView>
+                )}
               </>
             ) : null}
 
@@ -480,55 +559,59 @@ export default function HomeScreen() {
               action="All restaurants"
               onPress={() => router.push("/(tabs)/discover")}
             />
-            <View style={styles.quickDeliveryList}>
-              {quickRestaurants.map(({ restaurant, distanceText }) => (
-                <View
-                  key={restaurant.id}
-                  style={[styles.featuredCard, styles.quickFeaturedCard]}
-                >
-                  <Pressable
-                    style={styles.restaurantCardPressable}
-                    onPress={() =>
-                      router.push({
-                        pathname: "/restaurant/[id]",
-                        params: { id: restaurant.id },
-                      })
-                    }
+            {restaurantsLoading ? (
+              <RestaurantCardListSkeleton count={3} />
+            ) : (
+              <View style={styles.quickDeliveryList}>
+                {quickRestaurants.map(({ restaurant, distanceText }) => (
+                  <View
+                    key={restaurant.id}
+                    style={[styles.featuredCard, styles.quickFeaturedCard]}
                   >
-                    <Image
-                      source={{ uri: restaurant.coverImage }}
-                      style={styles.featuredImage}
-                      contentFit="cover"
+                    <Pressable
+                      style={styles.restaurantCardPressable}
+                      onPress={() =>
+                        router.push({
+                          pathname: "/restaurant/[id]",
+                          params: { id: restaurant.id },
+                        })
+                      }
+                    >
+                      <Image
+                        source={{ uri: restaurant.coverImage }}
+                        style={styles.featuredImage}
+                        contentFit="cover"
+                      />
+                      <View style={styles.featuredBody}>
+                        <View style={styles.featuredTopRow}>
+                          <Text style={styles.featuredName}>{restaurant.name}</Text>
+                          <View style={styles.ratingPill}>
+                            <Ionicons name="star" size={12} color="#F29D18" />
+                            <Text style={styles.ratingPillText}>
+                              {restaurant.rating.toFixed(1)}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={styles.featuredMeta}>
+                          {restaurant.cuisine} | {distanceText}
+                        </Text>
+                        <View style={styles.quickCardFooter}>
+                          <View style={styles.etaPill}>
+                            <Ionicons name="time-outline" size={13} color="#24314A" />
+                            <Text style={styles.etaText}>{restaurant.deliveryTime}</Text>
+                          </View>
+                          <Text style={styles.quickPrice}>From {restaurant.startingPrice}tk</Text>
+                        </View>
+                      </View>
+                    </Pressable>
+                    <FavoriteButton
+                      restaurantId={restaurant.id}
+                      style={styles.cardFavoriteButton}
                     />
-                    <View style={styles.featuredBody}>
-                      <View style={styles.featuredTopRow}>
-                        <Text style={styles.featuredName}>{restaurant.name}</Text>
-                        <View style={styles.ratingPill}>
-                          <Ionicons name="star" size={12} color="#F29D18" />
-                          <Text style={styles.ratingPillText}>
-                            {restaurant.rating.toFixed(1)}
-                          </Text>
-                        </View>
-                      </View>
-                      <Text style={styles.featuredMeta}>
-                        {restaurant.cuisine} | {distanceText}
-                      </Text>
-                      <View style={styles.quickCardFooter}>
-                        <View style={styles.etaPill}>
-                          <Ionicons name="time-outline" size={13} color="#24314A" />
-                          <Text style={styles.etaText}>{restaurant.deliveryTime}</Text>
-                        </View>
-                        <Text style={styles.quickPrice}>From {restaurant.startingPrice}tk</Text>
-                      </View>
-                    </View>
-                  </Pressable>
-                  <FavoriteButton
-                    restaurantId={restaurant.id}
-                    style={styles.cardFavoriteButton}
-                  />
-                </View>
-              ))}
-            </View>
+                  </View>
+                ))}
+              </View>
+            )}
           </>
         ) : (
           <View style={styles.emptyStateCard}>
@@ -580,32 +663,50 @@ export default function HomeScreen() {
               </View>
             </View>
 
-            {savedLocations.map((location) => (
-              <Pressable
-                key={location.id}
-                style={styles.sheetOption}
-                onPress={() => {
-                  setDeliveryLocation(location);
-                  closeSheet();
-                }}
-              >
-                <View style={styles.sheetOptionIcon}>
-                  <Ionicons
-                    name="bookmark-outline"
-                    size={18}
-                    color="#20263A"
-                  />
-                </View>
-                <View style={styles.sheetOptionCopy}>
-                  <Text style={styles.sheetOptionTitle}>{location.name}</Text>
-                  <Text style={styles.sheetOptionText}>{location.label}</Text>
-                </View>
-              </Pressable>
-            ))}
+            {user ? (
+              savedLocations.map((location) => (
+                <Pressable
+                  key={location.id}
+                  style={styles.sheetOption}
+                  disabled={selectDeliveryLocationMutation.isPending}
+                  onPress={() => void handleSelectLocation(location)}
+                >
+                  <View style={styles.sheetOptionIcon}>
+                    <Ionicons
+                      name="bookmark-outline"
+                      size={18}
+                      color="#20263A"
+                    />
+                  </View>
+                  <View style={styles.sheetOptionCopy}>
+                    <Text style={styles.sheetOptionTitle}>{location.name}</Text>
+                    <Text style={styles.sheetOptionText}>{location.label}</Text>
+                  </View>
+                </Pressable>
+              ))
+            ) : (
+              <View style={styles.guestSheetNote}>
+                <Ionicons
+                  name="information-circle-outline"
+                  size={18}
+                  color="#24314A"
+                />
+                <Text style={styles.guestSheetNoteText}>
+                  Login korle saved places ekhane dekhabe. Ekhon map theke location choose korte paro.
+                </Text>
+              </View>
+            )}
 
             <Pressable
               style={styles.sheetOption}
-              onPress={() => closeSheet(() => router.push("/location-picker"))}
+              onPress={() =>
+                closeSheet(() =>
+                  router.push({
+                    pathname: "/location-picker",
+                    params: { purpose: "delivery" },
+                  }),
+                )
+              }
             >
               <View style={styles.sheetOptionIcon}>
                 <Ionicons name="pin-outline" size={18} color="#20263A" />
@@ -1150,6 +1251,21 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "800",
     color: "#20263A",
+  },
+  guestSheetNote: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    padding: 14,
+    borderRadius: 22,
+    backgroundColor: "#FFF7F2",
+    marginBottom: 12,
+  },
+  guestSheetNoteText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    color: "#6F6A77",
   },
   sheetOption: {
     flexDirection: "row",

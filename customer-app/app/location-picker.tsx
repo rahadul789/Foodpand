@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import { StatusBar } from "expo-status-bar";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -17,8 +17,13 @@ import MapView, { Region } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import {
+  useUpdateDeviceLocationMutation,
+} from "@/lib/address-queries";
+import { useAuthStore } from "@/lib/auth-store";
+import {
   defaultDeliveryLocation,
   getDeliveryLocation,
+  setPendingPickedLocation,
   setDeliveryLocation,
 } from "@/lib/location-store";
 
@@ -32,7 +37,29 @@ const MAX_CAMERA_ZOOM = 19.5;
 
 export default function LocationPickerScreen() {
   const router = useRouter();
-  const initialLocation = getDeliveryLocation();
+  const params = useLocalSearchParams<{
+    purpose?: string;
+    latitude?: string;
+    longitude?: string;
+    label?: string;
+    subtitle?: string;
+  }>();
+  const user = useAuthStore((state) => state.user);
+  const updateDeviceLocationMutation = useUpdateDeviceLocationMutation();
+  const fallbackLocation = getDeliveryLocation();
+  const initialLocation =
+    params.purpose === "address" &&
+    params.latitude &&
+    params.longitude &&
+    Number.isFinite(Number(params.latitude)) &&
+    Number.isFinite(Number(params.longitude))
+      ? {
+          label: params.label || fallbackLocation.label,
+          subtitle: params.subtitle || fallbackLocation.subtitle,
+          latitude: Number(params.latitude),
+          longitude: Number(params.longitude),
+        }
+      : fallbackLocation;
   const initialLatitude = initialLocation.latitude;
   const initialLongitude = initialLocation.longitude;
   const mapRef = useRef<MapView>(null);
@@ -52,6 +79,7 @@ export default function LocationPickerScreen() {
   const [subtitle, setSubtitle] = useState(initialLocation.subtitle);
   const [loadingAddress, setLoadingAddress] = useState(false);
   const [locating, setLocating] = useState(false);
+  const pickerPurpose = params.purpose === "address" ? "address" : "delivery";
 
   const pinLift = useRef(new Animated.Value(0)).current;
   const pinPulse = useRef(new Animated.Value(1)).current;
@@ -351,6 +379,17 @@ export default function LocationPickerScreen() {
         animated: true,
         zoom: INITIAL_CAMERA_ZOOM,
       });
+
+      if (user) {
+        void updateDeviceLocationMutation
+          .mutateAsync({
+            label: "Current device location",
+            subtitle: "Updated from device GPS",
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          })
+          .catch(() => undefined);
+      }
     } catch {
       Alert.alert(
         "Something went wrong",
@@ -362,12 +401,20 @@ export default function LocationPickerScreen() {
   };
 
   const confirmLocation = () => {
-    setDeliveryLocation({
+    const nextLocation = {
       label,
       subtitle,
       latitude: region.latitude,
       longitude: region.longitude,
-    });
+    };
+
+    if (pickerPurpose === "address") {
+      setPendingPickedLocation(nextLocation);
+      router.back();
+      return;
+    }
+
+    setDeliveryLocation(nextLocation);
     router.back();
   };
 
@@ -559,7 +606,10 @@ export default function LocationPickerScreen() {
           )}
         </View>
 
-        <Pressable style={styles.confirmButton} onPress={confirmLocation}>
+        <Pressable
+          style={styles.confirmButton}
+          onPress={confirmLocation}
+        >
           <Text style={styles.confirmButtonLabel}>Use this location</Text>
         </Pressable>
       </View>

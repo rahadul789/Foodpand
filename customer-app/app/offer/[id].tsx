@@ -4,13 +4,13 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { dummyHomePromos } from "@/lib/customer-data";
+import { usePromosQuery } from "@/lib/content-queries";
 
 export default function OfferDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const offer =
-    dummyHomePromos.find((item) => item.id === id) ?? dummyHomePromos[0];
+  const { data: promosData, isLoading } = usePromosQuery();
+  const offer = promosData?.find((item) => item.id === id) ?? null;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
@@ -28,6 +28,23 @@ export default function OfferDetailScreen() {
           <View style={styles.placeholder} />
         </View>
 
+        {isLoading || !offer ? (
+          <View style={styles.loadingCard}>
+            <Ionicons
+              name={isLoading ? "time-outline" : "alert-circle-outline"}
+              size={26}
+              color="#24314A"
+            />
+            <Text style={styles.loadingTitle}>
+              {isLoading ? "Loading offer..." : "Offer not found"}
+            </Text>
+            <Text style={styles.loadingText}>
+              {isLoading
+                ? "Offer details are being prepared."
+                : "This deal is no longer available right now."}
+            </Text>
+          </View>
+        ) : (
         <View style={[styles.heroCard, { backgroundColor: offer.bg }]}>
           <View style={[styles.heroGlowLarge, { backgroundColor: offer.glow }]} />
           <View style={styles.heroGlowSmall} />
@@ -48,7 +65,9 @@ export default function OfferDetailScreen() {
             </View>
           </View>
         </View>
+        )}
 
+        {offer ? (
         <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>About this offer</Text>
           <Text style={styles.sectionText}>{offer.description}</Text>
@@ -59,7 +78,9 @@ export default function OfferDetailScreen() {
             </View>
           ) : null}
         </View>
+        ) : null}
 
+        {offer ? (
         <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>Why it is useful</Text>
           <View style={styles.listWrap}>
@@ -71,7 +92,9 @@ export default function OfferDetailScreen() {
             ))}
           </View>
         </View>
+        ) : null}
 
+        {offer ? (
         <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>Terms</Text>
           <View style={styles.listWrap}>
@@ -83,6 +106,7 @@ export default function OfferDetailScreen() {
             ))}
           </View>
         </View>
+        ) : null}
 
         <Pressable style={styles.ctaButton} onPress={() => router.push("/(tabs)/home")}>
           <Text style={styles.ctaButtonText}>Back to home</Text>
@@ -195,6 +219,25 @@ const styles = StyleSheet.create({
     padding: 18,
     backgroundColor: "#FFFFFF",
     gap: 12,
+  },
+  loadingCard: {
+    borderRadius: 28,
+    paddingHorizontal: 22,
+    paddingVertical: 30,
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "#FFFFFF",
+  },
+  loadingTitle: {
+    fontSize: 20,
+    fontWeight: "900",
+    color: "#20263A",
+  },
+  loadingText: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: "#6F6A77",
+    textAlign: "center",
   },
   sectionTitle: {
     fontSize: 18,

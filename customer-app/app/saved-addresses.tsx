@@ -3,6 +3,7 @@ import { StatusBar } from "expo-status-bar";
 import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Modal,
   Pressable,
   ScrollView,
@@ -13,15 +14,22 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import {
+  useAddressesQuery,
+  useCreateAddressMutation,
+  useDeleteAddressMutation,
+  useSelectDeliveryLocationMutation,
+  useUpdateAddressMutation,
+} from "@/lib/address-queries";
 import { useAuthStore } from "@/lib/auth-store";
 import {
   MAX_SAVED_LOCATIONS,
   getDeliveryLocation,
-  removeSavedLocation,
-  saveLocation,
+  setPendingPickedLocation,
   setDeliveryLocation,
   type SavedLocation,
   useDeliveryLocation,
+  usePendingPickedLocation,
   useSavedLocations,
 } from "@/lib/location-store";
 import { useUIStore } from "@/lib/ui-store";
@@ -63,13 +71,23 @@ export default function SavedAddressesScreen() {
   const user = useAuthStore((state) => state.user);
   const showToast = useUIStore((state) => state.showToast);
   const currentLocation = useDeliveryLocation();
+  const pendingPickedLocation = usePendingPickedLocation();
   const savedLocations = useSavedLocations();
+  const { data: addressData, isLoading } = useAddressesQuery(Boolean(user));
+  const createAddressMutation = useCreateAddressMutation();
+  const updateAddressMutation = useUpdateAddressMutation();
+  const deleteAddressMutation = useDeleteAddressMutation();
+  const selectDeliveryLocationMutation = useSelectDeliveryLocationMutation();
 
   const [editorVisible, setEditorVisible] = useState(false);
   const [draft, setDraft] = useState<EditorState>(buildDraft());
-  const [syncFromMap, setSyncFromMap] = useState(false);
+  const isSavingAddress =
+    createAddressMutation.isPending || updateAddressMutation.isPending;
+  const isRemovingAddress = deleteAddressMutation.isPending;
+  const isSelectingAddress = selectDeliveryLocationMutation.isPending;
 
-  const canAddMore = savedLocations.length < MAX_SAVED_LOCATIONS;
+  const maxSavedAddresses = addressData?.maxSavedAddresses ?? MAX_SAVED_LOCATIONS;
+  const canAddMore = savedLocations.length < maxSavedAddresses;
   const editorTitle = draft.id ? "Update address" : "Add address";
 
   useEffect(() => {
@@ -88,29 +106,28 @@ export default function SavedAddressesScreen() {
   }, [draft.id, editorVisible]);
 
   useEffect(() => {
-    if (!editorVisible || !syncFromMap) {
+    if (!editorVisible || !pendingPickedLocation) {
       return;
     }
 
     setDraft((prev) => ({
       ...prev,
-      label: currentLocation.label,
-      subtitle: currentLocation.subtitle,
-      latitude: currentLocation.latitude,
-      longitude: currentLocation.longitude,
+      label: pendingPickedLocation.label,
+      subtitle: pendingPickedLocation.subtitle,
+      latitude: pendingPickedLocation.latitude,
+      longitude: pendingPickedLocation.longitude,
     }));
-    setSyncFromMap(false);
-  }, [currentLocation, editorVisible, syncFromMap]);
+    setPendingPickedLocation(null);
+  }, [editorVisible, pendingPickedLocation]);
 
   const locationMeta = useMemo(
-    () =>
-      `${savedLocations.length}/${MAX_SAVED_LOCATIONS} saved`,
-    [savedLocations.length],
+    () => `${savedLocations.length}/${maxSavedAddresses} saved`,
+    [maxSavedAddresses, savedLocations.length],
   );
 
   const openAddEditor = () => {
     if (!canAddMore) {
-      showToast(`You can save up to ${MAX_SAVED_LOCATIONS} addresses only.`);
+      showToast(`You can save up to ${maxSavedAddresses} addresses only.`);
       return;
     }
 
@@ -136,22 +153,121 @@ export default function SavedAddressesScreen() {
   };
 
   const handleChooseFromMap = () => {
-    setSyncFromMap(true);
-    router.push("/location-picker");
+    router.push({
+      pathname: "/location-picker",
+      params: {
+        purpose: "address",
+        latitude: String(draft.latitude),
+        longitude: String(draft.longitude),
+        label: draft.label,
+        subtitle: draft.subtitle,
+      },
+    });
   };
 
-  const handleSave = () => {
-    const result = saveLocation(draft);
-    showToast(result.message);
+  const handleSave = async () => {
+    try {
+      if (draft.id) {
+        const previousLocation = savedLocations.find(
+          (location) => location.id === draft.id,
+        );
+        const previousSelectedLocation = currentLocation;
+        const nextLocation = {
+          id: draft.id,
+          name: draft.name.trim(),
+          label: draft.label.trim(),
+          subtitle: draft.subtitle.trim(),
+          latitude: draft.latitude,
+          longitude: draft.longitude,
+        };
+        const wasSelected = previousLocation
+          ? currentLocation.label === previousLocation.label &&
+            currentLocation.subtitle === previousLocation.subtitle &&
+            Math.abs(currentLocation.latitude - previousLocation.latitude) <
+              0.000001 &&
+            Math.abs(currentLocation.longitude - previousLocation.longitude) <
+              0.000001
+          : false;
 
-    if (result.ok) {
+        await updateAddressMutation.mutateAsync({
+          id: draft.id,
+          payload: {
+            name: draft.name,
+            label: draft.label,
+            subtitle: draft.subtitle,
+            latitude: draft.latitude,
+            longitude: draft.longitude,
+          },
+        });
+
+        if (wasSelected) {
+          setDeliveryLocation(nextLocation);
+          try {
+            await selectDeliveryLocationMutation.mutateAsync({
+              addressId: nextLocation.id,
+              label: nextLocation.label,
+              subtitle: nextLocation.subtitle,
+              latitude: nextLocation.latitude,
+              longitude: nextLocation.longitude,
+            });
+          } catch (error) {
+            setDeliveryLocation(previousSelectedLocation);
+            throw error;
+          }
+        }
+
+        showToast("Saved address updated.");
+      } else {
+        await createAddressMutation.mutateAsync({
+          name: draft.name,
+          label: draft.label,
+          subtitle: draft.subtitle,
+          latitude: draft.latitude,
+          longitude: draft.longitude,
+        });
+        showToast("Address saved.");
+      }
+
       setEditorVisible(false);
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : "Unable to save address.",
+      );
     }
   };
 
-  const handleRemove = (id: string) => {
-    const result = removeSavedLocation(id);
-    showToast(result.message);
+  const handleRemove = async (id: string) => {
+    try {
+      await deleteAddressMutation.mutateAsync(id);
+      showToast("Address removed.");
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : "Unable to remove address.",
+      );
+    }
+  };
+
+  const handleUseNow = async (location: SavedLocation) => {
+    const previousLocation = currentLocation;
+    setDeliveryLocation(location);
+
+    try {
+      await selectDeliveryLocationMutation.mutateAsync({
+        addressId: location.id,
+        label: location.label,
+        subtitle: location.subtitle,
+        latitude: location.latitude,
+        longitude: location.longitude,
+      });
+      showToast("Delivery location updated.");
+    } catch (error) {
+      setDeliveryLocation(previousLocation);
+      showToast(
+        error instanceof Error
+          ? error.message
+          : "Unable to update delivery location.",
+      );
+    }
   };
 
   if (!user) {
@@ -212,10 +328,7 @@ export default function SavedAddressesScreen() {
         </View>
 
         <Pressable
-          style={[
-            styles.addButton,
-            !canAddMore && styles.addButtonDisabled,
-          ]}
+          style={[styles.addButton, !canAddMore && styles.addButtonDisabled]}
           onPress={openAddEditor}
         >
           <Ionicons name="add-circle-outline" size={18} color="#FFFFFF" />
@@ -223,14 +336,22 @@ export default function SavedAddressesScreen() {
         </Pressable>
 
         <View style={styles.list}>
+          {isLoading ? (
+            <View style={styles.loadingCard}>
+              <ActivityIndicator size="small" color="#24314A" />
+              <Text style={styles.loadingText}>Loading saved addresses...</Text>
+            </View>
+          ) : null}
+
           {savedLocations.map((location) => (
             <View
               key={location.id}
               style={[
                 styles.card,
                 currentLocation.label === location.label &&
-                  currentLocation.subtitle === location.subtitle &&
-                  styles.cardSelected,
+                currentLocation.subtitle === location.subtitle
+                  ? styles.cardSelected
+                  : null,
               ]}
             >
               <View style={styles.cardTopRow}>
@@ -260,10 +381,8 @@ export default function SavedAddressesScreen() {
               <View style={styles.cardActions}>
                 <Pressable
                   style={styles.secondaryAction}
-                  onPress={() => {
-                    setDeliveryLocation(location);
-                    showToast("Delivery location updated.");
-                  }}
+                  disabled={isSelectingAddress}
+                  onPress={() => handleUseNow(location)}
                 >
                   <Ionicons name="navigate-outline" size={16} color="#24314A" />
                   <Text style={styles.secondaryActionText}>Use now</Text>
@@ -271,6 +390,7 @@ export default function SavedAddressesScreen() {
 
                 <Pressable
                   style={styles.secondaryAction}
+                  disabled={isSavingAddress}
                   onPress={() => openEditEditor(location)}
                 >
                   <Ionicons name="create-outline" size={16} color="#24314A" />
@@ -279,6 +399,7 @@ export default function SavedAddressesScreen() {
 
                 <Pressable
                   style={[styles.secondaryAction, styles.secondaryActionDanger]}
+                  disabled={isRemovingAddress}
                   onPress={() => handleRemove(location.id)}
                 >
                   <Ionicons name="trash-outline" size={16} color="#FF5D8F" />
@@ -360,10 +481,7 @@ export default function SavedAddressesScreen() {
               </Text>
             </Pressable>
 
-            <Pressable
-              style={styles.mapButton}
-              onPress={handleChooseFromMap}
-            >
+            <Pressable style={styles.mapButton} onPress={handleChooseFromMap}>
               <Ionicons name="map-outline" size={16} color="#24314A" />
               <Text style={styles.mapButtonText}>Choose from map</Text>
             </Pressable>
@@ -373,7 +491,9 @@ export default function SavedAddressesScreen() {
             </Text>
 
             <Pressable style={styles.primaryButton} onPress={handleSave}>
-              <Text style={styles.primaryButtonText}>Save address</Text>
+              <Text style={styles.primaryButtonText}>
+                {isSavingAddress ? "Saving..." : "Save address"}
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -491,6 +611,19 @@ const styles = StyleSheet.create({
   },
   list: {
     gap: 12,
+  },
+  loadingCard: {
+    borderRadius: 22,
+    padding: 16,
+    backgroundColor: "#FFFFFF",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  loadingText: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#24314A",
   },
   card: {
     borderRadius: 26,

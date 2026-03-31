@@ -16,7 +16,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { useAuthStore } from "@/lib/auth-store";
 import { getCartCount, useCartStore } from "@/lib/cart-store";
-import { useOrderStore } from "@/lib/order-store";
+import { useActiveOrdersQuery, useOrderHistoryQuery } from "@/lib/order-queries";
 import {
   GUIDE_BUDDY_NAME,
   type GuideBuddyDockSide,
@@ -110,11 +110,12 @@ export const GuideBuddyOverlay = memo(function GuideBuddyOverlay() {
   const router = useRouter();
   const pathname = usePathname();
   const normalizedPath = useMemo(() => normalizeGuideBuddyPath(pathname), [pathname]);
-  const firstName = getFirstName(useAuthStore((state) => state.user?.name));
+  const user = useAuthStore((state) => state.user);
+  const firstName = getFirstName(user?.name);
   const cartCount = useCartStore((state) => getCartCount(state.items));
-  const trackingOrder = useOrderStore(
-    (state) => state.activeOrders[0] ?? state.previousOrders[0] ?? null,
-  );
+  const { data: activeOrders = [] } = useActiveOrdersQuery(Boolean(user?.id));
+  const { data: previousOrders = [] } = useOrderHistoryQuery(Boolean(user?.id));
+  const trackingOrder = activeOrders[0] ?? previousOrders[0] ?? null;
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
 

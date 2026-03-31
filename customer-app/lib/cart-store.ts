@@ -22,6 +22,8 @@ type CartItem = {
 
 type CouponCode = "YUMMELA" | "FREEDEL";
 
+const yummelaMinOrderTk = 199;
+
 type AddItemParams = {
   restaurant: Restaurant;
   item: MenuItem;
@@ -360,6 +362,13 @@ export const useCartStore = create<CartState>((set, get) => ({
     }
 
     if (normalized === "YUMMELA") {
+      if (subtotalTk < yummelaMinOrderTk) {
+        return {
+          ok: false,
+          message: `YUMMELA use korte minimum TK ${yummelaMinOrderTk} order korte hobe.`,
+        };
+      }
+
       set({ appliedCoupon: "YUMMELA", couponDiscountTk: 50 });
       emitGuideBuddyEvent("coupon_applied");
       return { ok: true, message: "YUMMELA applied. You saved TK 50." };

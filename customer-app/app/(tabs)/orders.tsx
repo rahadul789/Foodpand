@@ -1,19 +1,32 @@
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import { useRouter } from "expo-router";
-import { useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Animated,
+  Easing,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { OrdersScreenSkeleton } from "@/components/order-skeletons";
 import { useAuthStore } from "@/lib/auth-store";
 import type { Order } from "@/lib/customer-data";
-import {
-  getResolvedOrder,
-  getOrderStatusStage,
-  useOrderStore,
-} from "@/lib/order-store";
+import { getOrderStatusStage, getResolvedOrder } from "@/lib/order-store";
+import { useCustomerOrderRealtime } from "@/lib/order-realtime";
+import { getDisplayOrderCode } from "@/lib/order-timing";
+import { useActiveOrdersQuery, useOrderHistoryQuery } from "@/lib/order-queries";
 
-const orderSteps = ["Order placed", "Restaurant accepts", "Delivery starts"];
+const orderSteps = [
+  "Order placed",
+  "Restaurant accepts",
+  "Ready for pickup",
+  "Delivery starts",
+];
 
 const previousOrderFilters = [
   { id: "all", label: "All", color: "#F4F0EB", icon: "grid-outline" },
@@ -46,13 +59,145 @@ function getHistoryStatusIcon(order: Order) {
   return "time-outline";
 }
 
+function getStatusIcon(status: Order["status"]) {
+  if (status === "Preparing") {
+    return "time-outline";
+  }
+
+  if (status === "Ready for pickup") {
+    return "restaurant-outline";
+  }
+
+  if (status === "On the way") {
+    return "bicycle-outline";
+  }
+
+  if (status === "Delivered") {
+    return "checkmark-circle-outline";
+  }
+
+  if (status === "Cancelled") {
+    return "close-circle-outline";
+  }
+
+  return "radio-button-on-outline";
+}
+
+function AnimatedStatusBadge({
+  status,
+  label,
+}: {
+  status: Order["status"];
+  label: string;
+}) {
+  const pulse = useRef(new Animated.Value(0.97)).current;
+  const isLive = status !== "Delivered" && status !== "Cancelled";
+
+  useEffect(() => {
+    if (!isLive) {
+      pulse.setValue(1);
+      return undefined;
+    }
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1.05,
+          duration: 900,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0.97,
+          duration: 900,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+
+    loop.start();
+    return () => loop.stop();
+  }, [isLive, pulse]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.liveBadge,
+        status === "Delivered"
+          ? styles.liveBadgeDelivered
+          : status === "Cancelled"
+            ? styles.liveBadgeCancelled
+            : styles.liveBadgeActive,
+        { transform: [{ scale: pulse }] },
+      ]}
+    >
+      <Ionicons name={getStatusIcon(status)} size={13} color="#24314A" />
+      <Text style={styles.liveBadgeText}>{label}</Text>
+    </Animated.View>
+  );
+}
+
+function AnimatedClockBlob() {
+  const drift = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(drift, {
+          toValue: 1,
+          duration: 1700,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+        Animated.timing(drift, {
+          toValue: 0,
+          duration: 1700,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+
+    loop.start();
+    return () => loop.stop();
+  }, [drift]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.heroClockBubble,
+        {
+          transform: [
+            {
+              translateY: drift.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, -7],
+              }),
+            },
+          ],
+        },
+      ]}
+    >
+      <Ionicons name="time-outline" size={24} color="#1E8E54" />
+    </Animated.View>
+  );
+}
+
 export default function OrdersScreen() {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
-  const activeOrders = useOrderStore((state) => state.activeOrders);
-  const previousOrders = useOrderStore((state) => state.previousOrders);
-  const [selectedFilter, setSelectedFilter] =
-    useState<PreviousOrderFilterId>("all");
+
+  useCustomerOrderRealtime(Boolean(user?.id));
+
+  const { data: activeOrders = [], isLoading: activeLoading } = useActiveOrdersQuery(
+    Boolean(user?.id),
+  );
+  const { data: previousOrders = [], isLoading: historyLoading } = useOrderHistoryQuery(
+    Boolean(user?.id),
+  );
+  const [selectedFilter, setSelectedFilter] = useState<PreviousOrderFilterId>("all");
+
   const latestActiveOrder = useMemo(
     () => getResolvedOrder(activeOrders[0] ?? null),
     [activeOrders],
@@ -110,24 +255,37 @@ export default function OrdersScreen() {
     );
   }
 
+  if (activeLoading || historyLoading) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={["top"]}>
+        <StatusBar style="dark" backgroundColor="#FFF7F2" />
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+          <OrdersScreenSkeleton />
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
       <StatusBar style="dark" backgroundColor="#FFF7F2" />
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
-      >
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         <View style={styles.heroCard}>
           <View style={styles.heroBlobOne} />
           <View style={styles.heroBlobTwo} />
+          <AnimatedClockBlob />
           <Text style={styles.heroTitle}>Orders</Text>
 
           {latestActiveOrder ? (
             <>
-              <Text style={styles.heroEta}>{latestActiveOrder.eta}</Text>
+              <AnimatedStatusBadge
+                status={latestActiveOrder.status}
+                label={latestActiveOrder.status}
+              />
+              <Text style={styles.heroEta}>{latestActiveOrder.restaurantName}</Text>
               <Text style={styles.heroMeta}>
-                {latestActiveOrder.restaurantName} | {latestActiveOrder.id}
+                {latestActiveOrder.eta} | {getDisplayOrderCode(latestActiveOrder)}
               </Text>
 
               <View style={styles.stepRow}>
@@ -158,7 +316,7 @@ export default function OrdersScreen() {
                   })
                 }
               >
-                <Text style={styles.trackButtonText}>Open latest order</Text>
+                <Text style={styles.trackButtonText}>View live order</Text>
                 <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
               </Pressable>
             </>
@@ -168,10 +326,7 @@ export default function OrdersScreen() {
               <Text style={styles.heroMeta}>
                 Place a fresh order to see live status here.
               </Text>
-              <Pressable
-                style={styles.trackButton}
-                onPress={() => router.push("/(tabs)/discover")}
-              >
+              <Pressable style={styles.trackButton} onPress={() => router.push("/(tabs)/discover")}>
                 <Text style={styles.trackButtonText}>Browse restaurants</Text>
                 <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
               </Pressable>
@@ -183,6 +338,7 @@ export default function OrdersScreen() {
           title="Active order"
           action={activeOrders.length > 1 ? `${activeOrders.length} live` : "Now"}
         />
+
         {latestActiveOrder ? (
           <Pressable
             style={styles.activeCard}
@@ -196,30 +352,34 @@ export default function OrdersScreen() {
             <View style={styles.activeTopRow}>
               <View style={styles.storeIcon}>
                 <Ionicons
-                  name={
-                    latestActiveOrder.status === "Pending acceptance"
-                      ? "time-outline"
-                      : latestActiveOrder.status === "Preparing"
-                        ? "restaurant-outline"
-                        : "bag-handle-outline"
-                  }
+                  name={getStatusIcon(latestActiveOrder.status)}
                   size={18}
                   color="#24314A"
                 />
               </View>
               <View style={styles.activeCopy}>
                 <Text style={styles.activeName}>{latestActiveOrder.restaurantName}</Text>
-                <Text style={styles.activeMeta}>
-                  {latestActiveOrder.items.join(" | ")}
-                </Text>
+                <Text style={styles.activeMeta}>{latestActiveOrder.items.join(" | ")}</Text>
               </View>
               <Text style={styles.activeTotal}>TK {latestActiveOrder.total}</Text>
             </View>
+
+            <View style={styles.activePillRow}>
+              <AnimatedStatusBadge
+                status={latestActiveOrder.status}
+                label={latestActiveOrder.status}
+              />
+              <View style={styles.activeInfoPill}>
+                <Ionicons name="time-outline" size={13} color="#24314A" />
+                <Text style={styles.activeInfoPillText}>{latestActiveOrder.eta}</Text>
+              </View>
+            </View>
+
             <View style={styles.activeFooter}>
               <Text style={styles.activeFooterText}>
                 {latestActiveOrder.riderName
                   ? `Rider: ${latestActiveOrder.riderName} | ${latestActiveOrder.paymentMethod}`
-                  : `${latestActiveOrder.status} | ${latestActiveOrder.paymentMethod}`}
+                  : `${latestActiveOrder.paymentMethod} | Tap to open details`}
               </Text>
               <Ionicons name="chevron-forward" size={18} color="#9B9087" />
             </View>
@@ -228,18 +388,14 @@ export default function OrdersScreen() {
           <View style={[styles.activeCard, styles.activeCardEmpty]}>
             <Text style={styles.activeName}>Nothing active right now</Text>
             <Text style={styles.activeMeta}>
-              When a restaurant has not accepted the order yet, you will also be
-              able to cancel it from order details.
+              Your latest live order will appear here with the clearest status updates.
             </Text>
           </View>
         )}
 
         {otherActiveOrders.length > 0 ? (
           <>
-            <SectionHeader
-              title="Other active orders"
-              action={`${otherActiveOrders.length} more`}
-            />
+            <SectionHeader title="Other active orders" action={`${otherActiveOrders.length} more`} />
             <View style={styles.secondaryActiveList}>
               {otherActiveOrders.map((order) => (
                 <Pressable
@@ -254,36 +410,21 @@ export default function OrdersScreen() {
                 >
                   <View style={styles.secondaryActiveLeft}>
                     <View style={styles.secondaryActiveIcon}>
-                      <Ionicons
-                        name={
-                          order.status === "Pending acceptance"
-                            ? "time-outline"
-                            : order.status === "Preparing"
-                              ? "restaurant-outline"
-                              : "bag-handle-outline"
-                        }
-                        size={16}
-                        color="#24314A"
-                      />
+                      <Ionicons name={getStatusIcon(order.status)} size={16} color="#24314A" />
                     </View>
                     <View style={styles.secondaryActiveCopy}>
                       <Text style={styles.secondaryActiveName}>{order.restaurantName}</Text>
-                      <Text style={styles.secondaryActiveMeta}>
-                        {order.status} | TK {order.total}
-                      </Text>
+                      <Text style={styles.secondaryActiveMeta}>{order.eta} | TK {order.total}</Text>
                     </View>
                   </View>
-                  <Ionicons name="chevron-forward" size={18} color="#9B9087" />
+                  <AnimatedStatusBadge status={order.status} label={order.status} />
                 </Pressable>
               ))}
             </View>
           </>
         ) : null}
 
-        <SectionHeader
-          title="Previous orders"
-          action={`${filteredOrders.length} found`}
-        />
+        <SectionHeader title="Previous orders" action={`${filteredOrders.length} found`} />
 
         <ScrollView
           horizontal
@@ -334,31 +475,30 @@ export default function OrdersScreen() {
             >
               <View style={styles.historyTopRow}>
                 <View style={styles.historyBadge}>
-                  <Ionicons
-                    name={getHistoryStatusIcon(order)}
-                    size={14}
-                    color="#24314A"
-                  />
+                  <Ionicons name={getHistoryStatusIcon(order)} size={14} color="#24314A" />
                 </View>
                 <View style={styles.historyCopy}>
                   <Text style={styles.historyName}>{order.restaurantName}</Text>
                   <Text style={styles.historyMeta}>
-                    {formatPlacedAt(order.placedAt)} | {order.eta}
+                    {formatPlacedAt(order.placedAt)} | {getDisplayOrderCode(order)}
                   </Text>
                 </View>
                 <Text style={styles.historyTotal}>TK {order.total}</Text>
               </View>
+
               <Text style={styles.historyItems}>{order.items.join(" | ")}</Text>
+
               <View style={styles.historyBottomRow}>
                 <View style={styles.historyPillRow}>
                   <View style={styles.historyPill}>
                     <Text style={styles.historyPillText}>{order.paymentMethod}</Text>
                   </View>
+                  <View style={styles.historyPill}>
+                    <Text style={styles.historyPillText}>Reorder available</Text>
+                  </View>
                   {order.discountTk > 0 ? (
                     <View style={[styles.historyPill, styles.historyPillOffer]}>
-                      <Text style={styles.historyPillOfferText}>
-                        Saved TK {order.discountTk}
-                      </Text>
+                      <Text style={styles.historyPillOfferText}>Saved TK {order.discountTk}</Text>
                     </View>
                   ) : null}
                   {order.status === "Cancelled" ? (
@@ -408,6 +548,7 @@ const styles = StyleSheet.create({
     padding: 18,
     overflow: "hidden",
     marginTop: 4,
+    gap: 10,
   },
   heroBlobOne: {
     position: "absolute",
@@ -429,24 +570,35 @@ const styles = StyleSheet.create({
     bottom: -26,
     left: -24,
   },
+  heroClockBubble: {
+    position: "absolute",
+    right: 22,
+    top: 18,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.74)",
+  },
   heroTitle: {
     fontSize: 30,
     fontWeight: "900",
     color: "#20263A",
   },
   heroEta: {
-    marginTop: 12,
-    fontSize: 38,
+    marginTop: 4,
+    fontSize: 30,
     fontWeight: "900",
     color: "#1E8E54",
+    paddingRight: 56,
   },
   heroMeta: {
-    marginTop: 4,
     fontSize: 14,
     color: "#6E7A6A",
   },
   stepRow: {
-    marginTop: 18,
+    marginTop: 10,
     flexDirection: "row",
     justifyContent: "space-between",
     gap: 12,
@@ -468,7 +620,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   trackButton: {
-    marginTop: 18,
+    marginTop: 8,
     minHeight: 54,
     borderRadius: 20,
     alignItems: "center",
@@ -481,6 +633,29 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "800",
     color: "#FFFFFF",
+  },
+  liveBadge: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+  },
+  liveBadgeActive: {
+    backgroundColor: "rgba(255,255,255,0.76)",
+  },
+  liveBadgeDelivered: {
+    backgroundColor: "#E7F8EE",
+  },
+  liveBadgeCancelled: {
+    backgroundColor: "#FFE8E8",
+  },
+  liveBadgeText: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: "#24314A",
   },
   sectionHeader: {
     flexDirection: "row",
@@ -543,6 +718,26 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     color: "#20263A",
   },
+  activePillRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  activeInfoPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: "#F4F0EB",
+  },
+  activeInfoPillText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#24314A",
+  },
   activeFooter: {
     flexDirection: "row",
     alignItems: "center",
@@ -553,6 +748,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     color: "#7B6F69",
+    flex: 1,
   },
   secondaryActiveList: {
     gap: 10,
@@ -676,6 +872,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
     flexWrap: "wrap",
+    flex: 1,
   },
   historyPill: {
     paddingHorizontal: 10,

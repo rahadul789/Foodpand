@@ -40,6 +40,30 @@ export type RestaurantThresholdOffer = {
   discountTk: number;
 };
 
+export type RestaurantOffer = {
+  type:
+    | "voucher"
+    | "threshold_discount"
+    | "free_delivery"
+    | "flat_discount"
+    | "percentage_discount"
+    | "item_discount"
+    | "category_discount"
+    | "buy_x_get_y";
+  title: string;
+  shortLabel?: string;
+  description?: string;
+  code?: string;
+  minOrderTk?: number;
+  discountTk?: number;
+  discountPercent?: number;
+  maxDiscountTk?: number;
+  freeDelivery?: boolean;
+  isAutoApply?: boolean;
+  isActive?: boolean;
+  stackable?: boolean;
+};
+
 export type Restaurant = {
   id: string;
   name: string;
@@ -61,6 +85,7 @@ export type Restaurant = {
   featured?: boolean;
   voucher?: string | null;
   thresholdOffer?: RestaurantThresholdOffer | null;
+  offers?: RestaurantOffer[];
   menu: MenuItem[];
 };
 
@@ -125,11 +150,14 @@ export type MenuItemDetail = {
 
 export type Order = {
   id: string;
+  orderCode?: string;
   restaurantId: string;
   restaurantName: string;
+  restaurantCoverImage?: string;
   status:
     | "Pending acceptance"
     | "Preparing"
+    | "Ready for pickup"
     | "On the way"
     | "Delivered"
     | "Cancelled";
@@ -139,6 +167,16 @@ export type Order = {
   deliveryTk: number;
   serviceFeeTk: number;
   discountTk: number;
+  couponCode?: string;
+  appliedOffer?: {
+    type: string;
+    title: string;
+    shortLabel?: string;
+    code?: string;
+    discountTk: number;
+    freeDeliveryApplied?: boolean;
+    isAutoApply?: boolean;
+  };
   accent: string;
   icon: string;
   items: string[];
@@ -156,6 +194,20 @@ export type Order = {
   note?: string;
   canTrack?: boolean;
   riderName?: string;
+  prepareMinMinutes?: number;
+  prepareMaxMinutes?: number;
+  estimatedReadyAt?: string;
+  restaurantAcceptedAt?: string;
+  readyForPickupAt?: string;
+  deliveryAcceptedAt?: string;
+  pickedUpAt?: string;
+  deliveredAt?: string;
+  statusHistory?: Array<{
+    status: Order["status"];
+    actorRole: "customer" | "restaurant_owner" | "delivery_partner" | "admin";
+    note?: string;
+    createdAt: string;
+  }>;
 };
 
 export const categories: Category[] = [

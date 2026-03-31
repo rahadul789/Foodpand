@@ -4,10 +4,14 @@ import { useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { OffersListSkeleton } from "@/components/content-skeletons";
 import { dummyHomePromos } from "@/lib/customer-data";
+import { usePromosQuery } from "@/lib/content-queries";
 
 export default function OffersScreen() {
   const router = useRouter();
+  const { data: promosData, isLoading } = usePromosQuery();
+  const promos = promosData ?? dummyHomePromos;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
@@ -35,39 +39,43 @@ export default function OffersScreen() {
           </Text>
         </View>
 
-        <View style={styles.cardList}>
-          {dummyHomePromos.map((promo) => (
-            <Pressable
-              key={promo.id}
-              style={[styles.offerCard, { backgroundColor: promo.bg }]}
-              onPress={() =>
-                router.push({
-                  pathname: "/offer/[id]",
-                  params: { id: promo.id },
-                })
-              }
-            >
-              <View
-                style={[styles.offerGlowLarge, { backgroundColor: promo.glow }]}
-              />
-              <View style={styles.offerGlowSmall} />
-              {promo.eyebrow ? (
-                <Text style={styles.offerEyebrow}>{promo.eyebrow}</Text>
-              ) : null}
-              <Text style={styles.offerTitle}>{promo.title}</Text>
-              <Text style={styles.offerNote}>{promo.note}</Text>
-              <View style={styles.offerFooter}>
-                <View style={styles.offerPill}>
-                  <Ionicons name="ticket-outline" size={14} color="#20263A" />
-                  <Text style={styles.offerPillText}>
-                    {promo.code ?? "Offer details"}
-                  </Text>
+        {isLoading ? (
+          <OffersListSkeleton />
+        ) : (
+          <View style={styles.cardList}>
+            {promos.map((promo) => (
+              <Pressable
+                key={promo.id}
+                style={[styles.offerCard, { backgroundColor: promo.bg }]}
+                onPress={() =>
+                  router.push({
+                    pathname: "/offer/[id]",
+                    params: { id: promo.id },
+                  })
+                }
+              >
+                <View
+                  style={[styles.offerGlowLarge, { backgroundColor: promo.glow }]}
+                />
+                <View style={styles.offerGlowSmall} />
+                {promo.eyebrow ? (
+                  <Text style={styles.offerEyebrow}>{promo.eyebrow}</Text>
+                ) : null}
+                <Text style={styles.offerTitle}>{promo.title}</Text>
+                <Text style={styles.offerNote}>{promo.note}</Text>
+                <View style={styles.offerFooter}>
+                  <View style={styles.offerPill}>
+                    <Ionicons name="ticket-outline" size={14} color="#20263A" />
+                    <Text style={styles.offerPillText}>
+                      {promo.code ?? "Offer details"}
+                    </Text>
+                  </View>
+                  <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
                 </View>
-                <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
-              </View>
-            </Pressable>
-          ))}
-        </View>
+              </Pressable>
+            ))}
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );

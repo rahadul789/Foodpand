@@ -2,19 +2,17 @@ import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { StatusBar } from "expo-status-bar";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useMemo } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { FavoriteButton } from "@/components/favorite-button";
-import { dummyRestaurants } from "@/lib/customer-data";
+import { RestaurantCardListSkeleton } from "@/components/restaurant-skeletons";
 import { useDeliveryLocation } from "@/lib/location-store";
 import {
   formatDistanceKm,
-  getFeaturedRestaurants,
   getRestaurantDistanceKm,
-  getVoucherRestaurants,
 } from "@/lib/restaurant-utils";
+import { useRestaurantsQuery } from "@/lib/restaurant-queries";
 
 type CollectionMode = "featured" | "offers";
 
@@ -23,24 +21,14 @@ export default function RestaurantCollectionScreen() {
   const params = useLocalSearchParams<{ mode?: string }>();
   const deliveryLocation = useDeliveryLocation();
   const mode: CollectionMode = params.mode === "offers" ? "offers" : "featured";
-
-  const restaurants = useMemo(() => {
-    if (mode === "offers") {
-      return getVoucherRestaurants({
-        restaurants: dummyRestaurants,
-        latitude: deliveryLocation.latitude,
-        longitude: deliveryLocation.longitude,
-        limit: 50,
-      });
-    }
-
-    return getFeaturedRestaurants({
-      restaurants: dummyRestaurants,
-      latitude: deliveryLocation.latitude,
-      longitude: deliveryLocation.longitude,
-      limit: 50,
-    });
-  }, [deliveryLocation.latitude, deliveryLocation.longitude, mode]);
+  const { data: restaurants = [], isLoading } = useRestaurantsQuery({
+    lat: deliveryLocation.latitude,
+    lng: deliveryLocation.longitude,
+    radiusKm: 3,
+    limit: 50,
+    sort: "nearest",
+    ...(mode === "offers" ? { offers: true } : { featured: true }),
+  });
 
   const title = mode === "offers" ? "Offers near you" : "Featured restaurants";
   const subtitle =
@@ -76,7 +64,9 @@ export default function RestaurantCollectionScreen() {
           <Text style={styles.sectionAction}>{restaurants.length}</Text>
         </View>
 
-        {restaurants.length > 0 ? (
+        {isLoading ? (
+          <RestaurantCardListSkeleton count={3} />
+        ) : restaurants.length > 0 ? (
           <View style={styles.list}>
             {restaurants.map((restaurant) => (
               <View key={restaurant.id} style={styles.card}>

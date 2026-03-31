@@ -2,8 +2,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { StatusBar } from "expo-status-bar";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Animated,
+  Easing,
   Modal,
   Pressable,
   ScrollView,
@@ -13,13 +15,25 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { dummyRestaurants, type Order } from "@/lib/customer-data";
+import { OrderDetailSkeleton } from "@/components/order-skeletons";
+import type { Order } from "@/lib/customer-data";
+import { useAuthStore } from "@/lib/auth-store";
 import { useCartStore } from "@/lib/cart-store";
 import {
   getResolvedOrder,
   isOrderCancelable,
-  useOrderStore,
 } from "@/lib/order-store";
+import {
+  useCancelOrderMutation,
+  useOrderDetailQuery,
+} from "@/lib/order-queries";
+import { useCustomerOrderRealtime } from "@/lib/order-realtime";
+import { useRestaurantDetailQuery } from "@/lib/restaurant-queries";
+import {
+  formatTimeLabel,
+  getDisplayOrderCode,
+  getDynamicPrepareRange,
+} from "@/lib/order-timing";
 import { useUIStore } from "@/lib/ui-store";
 
 function formatDateTime(value: string) {
@@ -51,6 +65,14 @@ function getStatusAccent(status: Order["status"]) {
     };
   }
 
+  if (status === "Ready for pickup") {
+    return {
+      bg: "#EAF7FF",
+      text: "#267AA8",
+      icon: "checkmark-circle-outline" as const,
+    };
+  }
+
   if (status === "Cancelled") {
     return {
       bg: "#FFE3E3",
@@ -66,28 +88,110 @@ function getStatusAccent(status: Order["status"]) {
   };
 }
 
+function FloatingStatusOrb({
+  icon,
+  tint,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  tint: string;
+}) {
+  const bob = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(bob, {
+          toValue: 1,
+          duration: 1600,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+        Animated.timing(bob, {
+          toValue: 0,
+          duration: 1600,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+
+    loop.start();
+    return () => loop.stop();
+  }, [bob]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.heroFloatingOrb,
+        {
+          transform: [
+            {
+              translateY: bob.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, -8],
+              }),
+            },
+          ],
+        },
+      ]}
+    >
+      <Ionicons name={icon} size={22} color={tint} />
+    </Animated.View>
+  );
+}
+
 export default function OrderDetailsScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const activeOrders = useOrderStore((state) => state.activeOrders);
-  const previousOrders = useOrderStore((state) => state.previousOrders);
-  const cancelOrder = useOrderStore((state) => state.cancelOrder);
+  const user = useAuthStore((state) => state.user);
   const replaceCartWithItems = useCartStore((state) => state.replaceCartWithItems);
   const showToast = useUIStore((state) => state.showToast);
+  const cancelOrderMutation = useCancelOrderMutation();
   const [showCancelModal, setShowCancelModal] = useState(false);
+  const [progressNow, setProgressNow] = useState(() => Date.now());
 
+  useCustomerOrderRealtime(Boolean(user?.id));
+
+  const {
+    data: orderData,
+    isLoading: orderLoading,
+  } = useOrderDetailQuery(id, Boolean(user?.id));
   const order = useMemo(
-    () =>
-      getResolvedOrder(
-        [...activeOrders, ...previousOrders].find((entry) => entry.id === id) ?? null,
-      ),
-    [activeOrders, id, previousOrders],
+    () => getResolvedOrder(orderData ?? null),
+    [orderData],
   );
-  const restaurant = dummyRestaurants.find(
-    (entry) => entry.id === order?.restaurantId,
-  );
+  const {
+    data: restaurant,
+    isLoading: restaurantLoading,
+  } = useRestaurantDetailQuery(order?.restaurantId);
 
-  if (!order || !restaurant) {
+  useEffect(() => {
+    if (order?.status !== "Preparing") {
+      return undefined;
+    }
+
+    const timer = setInterval(() => {
+      setProgressNow(Date.now());
+    }, 60_000);
+
+    return () => clearInterval(timer);
+  }, [order?.status]);
+
+  if (orderLoading || (order && restaurantLoading)) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={["top"]}>
+        <StatusBar style="dark" backgroundColor="#FFF7F2" />
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scrollContent}
+        >
+          <OrderDetailSkeleton />
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (!order) {
     return (
       <SafeAreaView style={styles.safeArea} edges={["top"]}>
         <StatusBar style="dark" backgroundColor="#FFF7F2" />
@@ -103,8 +207,17 @@ export default function OrderDetailsScreen() {
 
   const statusAccent = getStatusAccent(order.status);
   const cancelable = isOrderCancelable(order);
+  const isPreviousOrder =
+    order.status === "Delivered" || order.status === "Cancelled";
+  const dynamicPrepareRange = getDynamicPrepareRange(order, progressNow);
+  const heroImage = restaurant?.coverImage || order.restaurantCoverImage || "";
 
   const handleReorder = () => {
+    if (!restaurant) {
+      showToast("Restaurant information is unavailable right now.");
+      return;
+    }
+
     const entries = order.lineItems
       .map((lineItem, index) => {
         const menuItem = restaurant.menu.find((item) => item.id === lineItem.itemId);
@@ -140,13 +253,21 @@ export default function OrderDetailsScreen() {
     }
   };
 
-  const handleConfirmCancel = () => {
-    const result = cancelOrder(order.id);
-    setShowCancelModal(false);
-    showToast(result.message);
-
-    if (result.ok) {
-      router.replace("/(tabs)/orders");
+  const handleConfirmCancel = async () => {
+    try {
+      const cancelledOrder = await cancelOrderMutation.mutateAsync(order.id);
+      setShowCancelModal(false);
+      showToast("Order cancelled before restaurant acceptance.");
+      router.replace({
+        pathname: "/order/[id]",
+        params: { id: cancelledOrder.id },
+      });
+    } catch (error) {
+      showToast(
+        error instanceof Error
+          ? error.message
+          : "Unable to cancel the order right now.",
+      );
     }
   };
 
@@ -167,12 +288,17 @@ export default function OrderDetailsScreen() {
         </View>
 
         <View style={styles.heroCard}>
-          <Image
-            source={{ uri: restaurant.coverImage }}
-            style={styles.heroImage}
-            contentFit="cover"
-          />
+          {heroImage ? (
+            <Image
+              source={{ uri: heroImage }}
+              style={styles.heroImage}
+              contentFit="cover"
+            />
+          ) : (
+            <View style={[styles.heroImage, styles.heroFallback]} />
+          )}
           <View style={styles.heroOverlay} />
+          <FloatingStatusOrb icon={statusAccent.icon} tint={statusAccent.text} />
           <View style={styles.heroContent}>
             <View style={[styles.statusPill, { backgroundColor: statusAccent.bg }]}>
               <Ionicons name={statusAccent.icon} size={14} color={statusAccent.text} />
@@ -182,8 +308,9 @@ export default function OrderDetailsScreen() {
             </View>
             <Text style={styles.heroTitle}>{order.restaurantName}</Text>
             <Text style={styles.heroMeta}>
-              {order.id} | {formatDateTime(order.placedAt)}
+              {getDisplayOrderCode(order)} | {formatDateTime(order.placedAt)}
             </Text>
+            <Text style={styles.heroSubMeta}>{order.eta}</Text>
           </View>
         </View>
 
@@ -194,31 +321,39 @@ export default function OrderDetailsScreen() {
             <Text style={styles.highlightValue}>TK {order.total}</Text>
           </View>
           <View style={[styles.highlightCard, { backgroundColor: "#E7F8EE" }]}>
-            <Ionicons name="time-outline" size={18} color="#24314A" />
-            <Text style={styles.highlightTitle}>Delivery</Text>
-            <Text style={styles.highlightValue}>{order.eta}</Text>
+            <Ionicons name={statusAccent.icon} size={18} color="#24314A" />
+            <Text style={styles.highlightTitle}>Current status</Text>
+            <Text style={styles.highlightValueSmall}>{order.status}</Text>
           </View>
         </View>
 
-        <View style={styles.policyCard}>
-          <View style={styles.policyIcon}>
-            <Ionicons
-              name={cancelable ? "shield-checkmark-outline" : "restaurant-outline"}
-              size={18}
-              color="#24314A"
-            />
+        {dynamicPrepareRange ? (
+          <View style={styles.prepareCard}>
+            <View style={styles.prepareTopRow}>
+              <View style={styles.prepareIcon}>
+                <Ionicons
+                  name={dynamicPrepareRange.delayed ? "time-outline" : "restaurant-outline"}
+                  size={18}
+                  color={dynamicPrepareRange.delayed ? "#9B6500" : "#24314A"}
+                />
+              </View>
+              <View style={styles.prepareCopy}>
+                <Text style={styles.prepareTitle}>
+                  {dynamicPrepareRange.delayed
+                    ? "Kitchen is taking a little longer"
+                    : `Prepare time now ${dynamicPrepareRange.displayLabel}`}
+                </Text>
+                <Text style={styles.prepareText}>
+                  {dynamicPrepareRange.delayed
+                    ? "The restaurant is still preparing your order. We will refresh the next status as soon as it changes."
+                    : `Started ${formatTimeLabel(order.restaurantAcceptedAt) ?? "just now"} - Estimated ready around ${
+                        formatTimeLabel(order.estimatedReadyAt) ?? "soon"
+                      }`}
+                </Text>
+              </View>
+            </View>
           </View>
-          <View style={styles.policyCopy}>
-            <Text style={styles.policyTitle}>Cancellation policy</Text>
-            <Text style={styles.policyText}>
-              {cancelable
-                ? "This order can still be cancelled because the restaurant has not accepted it yet."
-                : order.status === "Cancelled"
-                  ? "This order was cancelled before the restaurant accepted it."
-                  : "Once the restaurant accepts the order, cancellation is locked to prevent kitchen misuse and food waste."}
-            </Text>
-          </View>
-        </View>
+        ) : null}
 
         <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>Items</Text>
@@ -320,12 +455,33 @@ export default function OrderDetailsScreen() {
               <Text style={styles.secondaryButtonText}>Need help</Text>
             </Pressable>
           )}
+          {isPreviousOrder ? (
+            <Pressable style={styles.primaryButton} onPress={handleReorder}>
+              <Text style={styles.primaryButtonText}>Reorder</Text>
+              <Ionicons name="refresh" size={18} color="#FFFFFF" />
+            </Pressable>
+          ) : null}
         </View>
 
-        <Pressable style={styles.primaryButton} onPress={handleReorder}>
-          <Text style={styles.primaryButtonText}>Reorder</Text>
-          <Ionicons name="refresh" size={18} color="#FFFFFF" />
-        </Pressable>
+        <View style={styles.policyCard}>
+          <View style={styles.policyIcon}>
+            <Ionicons
+              name={cancelable ? "shield-checkmark-outline" : "restaurant-outline"}
+              size={18}
+              color="#24314A"
+            />
+          </View>
+          <View style={styles.policyCopy}>
+            <Text style={styles.policyTitle}>Cancellation policy</Text>
+            <Text style={styles.policyText}>
+              {cancelable
+                ? "You can cancel this order now because the restaurant has not accepted it yet."
+                : order.status === "Cancelled"
+                  ? "This order was cancelled before the restaurant accepted it."
+                  : "After restaurant acceptance, cancellation is locked to reduce kitchen misuse and food waste."}
+            </Text>
+          </View>
+        </View>
       </ScrollView>
 
       <Modal
@@ -357,7 +513,7 @@ export default function OrderDetailsScreen() {
               </Pressable>
               <Pressable
                 style={[styles.modalButton, styles.modalButtonDanger]}
-                onPress={handleConfirmCancel}
+                onPress={() => void handleConfirmCancel()}
               >
                 <Text style={styles.modalButtonDangerText}>Cancel now</Text>
               </Pressable>
@@ -433,9 +589,23 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
   },
+  heroFallback: {
+    backgroundColor: "#F1E7DE",
+  },
   heroOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(20, 23, 35, 0.34)",
+  },
+  heroFloatingOrb: {
+    position: "absolute",
+    top: 18,
+    right: 18,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.84)",
   },
   heroContent: {
     position: "absolute",
@@ -467,6 +637,44 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "rgba(255,255,255,0.82)",
   },
+  heroSubMeta: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: "#FFFFFF",
+  },
+  prepareCard: {
+    borderRadius: 24,
+    padding: 16,
+    backgroundColor: "#FFF6E9",
+    gap: 10,
+  },
+  prepareTopRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  prepareIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
+  },
+  prepareCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  prepareTitle: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: "#20263A",
+  },
+  prepareText: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: "#6F6A77",
+  },
   highlightRow: {
     flexDirection: "row",
     gap: 12,
@@ -484,6 +692,11 @@ const styles = StyleSheet.create({
   },
   highlightValue: {
     fontSize: 22,
+    fontWeight: "900",
+    color: "#20263A",
+  },
+  highlightValueSmall: {
+    fontSize: 18,
     fontWeight: "900",
     color: "#20263A",
   },
@@ -629,9 +842,11 @@ const styles = StyleSheet.create({
   actionRow: {
     flexDirection: "row",
     gap: 12,
+    flexWrap: "wrap",
   },
   secondaryButton: {
     flex: 1,
+    minWidth: 148,
     minHeight: 54,
     borderRadius: 20,
     alignItems: "center",
@@ -657,6 +872,8 @@ const styles = StyleSheet.create({
     color: "#C83A3A",
   },
   primaryButton: {
+    flex: 1,
+    minWidth: 148,
     minHeight: 56,
     borderRadius: 22,
     alignItems: "center",

@@ -14,13 +14,22 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { defaultDeliveryLocation, setDeliveryLocation } from "@/lib/location-store";
+import {
+  useUpdateDeviceLocationMutation,
+} from "@/lib/address-queries";
+import { useAuthStore } from "@/lib/auth-store";
+import {
+  defaultDeliveryLocation,
+  setDeliveryLocation,
+  type DeliveryLocation,
+} from "@/lib/location-store";
+import { useUIStore } from "@/lib/ui-store";
 
-async function syncCurrentLocationAndContinue(onDone: () => void) {
+async function syncCurrentLocation() {
   const permission = await Location.getForegroundPermissionsAsync();
 
   if (permission.status !== "granted") {
-    return false;
+    return null;
   }
 
   try {
@@ -31,8 +40,7 @@ async function syncCurrentLocationAndContinue(onDone: () => void) {
       }));
 
     if (!position) {
-      onDone();
-      return true;
+      return defaultDeliveryLocation;
     }
 
     const places = await Location.reverseGeocodeAsync({
@@ -41,7 +49,7 @@ async function syncCurrentLocationAndContinue(onDone: () => void) {
     });
     const place = places[0];
 
-    setDeliveryLocation({
+    return {
       label:
         [place?.name, place?.street].filter(Boolean).join(", ") ||
         defaultDeliveryLocation.label,
@@ -51,18 +59,17 @@ async function syncCurrentLocationAndContinue(onDone: () => void) {
           .join(", ") || defaultDeliveryLocation.subtitle,
       latitude: position.coords.latitude,
       longitude: position.coords.longitude,
-    });
-
-    onDone();
-    return true;
+    };
   } catch {
-    onDone();
-    return true;
+    return defaultDeliveryLocation;
   }
 }
 
 export default function AllowLocationScreen() {
   const router = useRouter();
+  const user = useAuthStore((state) => state.user);
+  const showToast = useUIStore((state) => state.showToast);
+  const updateDeviceLocationMutation = useUpdateDeviceLocationMutation();
   const rootNavigationState = useRootNavigationState();
   const [checking, setChecking] = useState(true);
   const [requesting, setRequesting] = useState(false);
@@ -78,12 +85,41 @@ export default function AllowLocationScreen() {
     setPendingRedirect(true);
   }, [rootNavigationState?.key, router]);
 
-  const checkPermission = useCallback(async () => {
-    const hasPermission = await syncCurrentLocationAndContinue(continueToHome);
+  const syncBackendLocation = useCallback(
+    async (location: DeliveryLocation) => {
+      if (!user) {
+        return;
+      }
 
-    setGranted(Boolean(hasPermission));
+      try {
+        await updateDeviceLocationMutation.mutateAsync(location);
+      } catch (error) {
+        showToast(
+          error instanceof Error
+            ? error.message
+            : "Unable to sync your selected location right now.",
+        );
+      }
+    },
+    [
+      showToast,
+      updateDeviceLocationMutation,
+      user,
+    ],
+  );
+
+  const checkPermission = useCallback(async () => {
+    const location = await syncCurrentLocation();
+
+    if (location) {
+      setDeliveryLocation(location);
+      void syncBackendLocation(location);
+      continueToHome();
+    }
+
+    setGranted(Boolean(location));
     setChecking(false);
-  }, [continueToHome]);
+  }, [continueToHome, syncBackendLocation]);
 
   useEffect(() => {
     if (!pendingRedirect || !rootNavigationState?.key) {
@@ -115,7 +151,13 @@ export default function AllowLocationScreen() {
 
       if (permission.status === "granted") {
         setGranted(true);
-        await syncCurrentLocationAndContinue(continueToHome);
+        const location = await syncCurrentLocation();
+
+        if (location) {
+          setDeliveryLocation(location);
+          await syncBackendLocation(location);
+          continueToHome();
+        }
       } else {
         setGranted(false);
       }

@@ -1,114 +1,135 @@
 import { create } from "zustand";
 
+import {
+  type AuthPayload,
+  type SignupPayload,
+  getMeRequest,
+  loginRequest,
+  signupRequest,
+} from "@/lib/auth-api";
+import { setApiAccessToken } from "@/lib/api-client";
+
 export type AuthUser = {
   id: string;
   name: string;
   email: string;
   phone: string;
+  role: "customer" | "restaurant_owner" | "delivery_partner" | "admin";
   location: string;
   loyaltyPoints: number;
 };
 
-type SignInPayload = {
-  email: string;
-  password: string;
-};
-
-type SignUpPayload = {
-  name: string;
-  email: string;
-  phone: string;
-  password: string;
+type AuthResult = {
+  ok: boolean;
+  message: string;
 };
 
 type AuthStore = {
-  users: Array<AuthUser & { password: string }>;
+  accessToken: string | null;
   user: AuthUser | null;
-  signIn: (payload: SignInPayload) => { ok: boolean; message: string };
-  signUp: (payload: SignUpPayload) => { ok: boolean; message: string };
+  isLoading: boolean;
+  signIn: (payload: AuthPayload) => Promise<AuthResult>;
+  signUp: (payload: SignupPayload) => Promise<AuthResult>;
+  hydrateMe: () => Promise<void>;
+  setProfileLocation: (location: string) => void;
   signOut: () => void;
 };
 
-const seededUsers: Array<AuthUser & { password: string }> = [
-  {
-    id: "user-1",
-    name: "Ava Rahman",
-    email: "ava.rahman@example.com",
-    phone: "01711-223344",
-    password: "123456",
-    location: "Netrakona Sadar, Mymensingh",
-    loyaltyPoints: 1280,
-  },
-];
-
-function normalizeEmail(email: string) {
-  return email.trim().toLowerCase();
-}
-
 export const useAuthStore = create<AuthStore>((set, get) => ({
-  users: seededUsers,
+  accessToken: null,
   user: null,
-  signIn: ({ email, password }) => {
-    const normalizedEmail = normalizeEmail(email);
-    const existingUser = get().users.find(
-      (entry) =>
-        normalizeEmail(entry.email) === normalizedEmail &&
-        entry.password === password.trim(),
-    );
+  isLoading: false,
+  signIn: async (payload) => {
+    set({ isLoading: true });
 
-    if (!existingUser) {
+    try {
+      const data = await loginRequest(payload);
+      setApiAccessToken(data.accessToken);
+      set({
+        accessToken: data.accessToken,
+        user: data.user,
+        isLoading: false,
+      });
+
+      return {
+        ok: true,
+        message: "Welcome back",
+      };
+    } catch (error) {
+      set({ isLoading: false });
       return {
         ok: false,
-        message: "Email বা password ঠিক হয়নি।",
+        message:
+          error instanceof Error ? error.message : "Login failed. Try again.",
       };
     }
-
-    const { password: _password, ...user } = existingUser;
-    set({ user });
-
-    return {
-      ok: true,
-      message: "Welcome back",
-    };
   },
-  signUp: ({ name, email, phone, password }) => {
-    const normalizedEmail = normalizeEmail(email);
-    const trimmedPhone = phone.trim();
+  signUp: async (payload) => {
+    set({ isLoading: true });
 
-    if (
-      get().users.some(
-        (entry) => normalizeEmail(entry.email) === normalizedEmail,
-      )
-    ) {
+    try {
+      const data = await signupRequest(payload);
+      setApiAccessToken(data.accessToken);
+      set({
+        accessToken: data.accessToken,
+        user: data.user,
+        isLoading: false,
+      });
+
+      return {
+        ok: true,
+        message: "Account created",
+      };
+    } catch (error) {
+      set({ isLoading: false });
       return {
         ok: false,
-        message: "এই email দিয়ে already account আছে।",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Signup failed. Try again.",
       };
     }
-
-    const nextUser = {
-      id: `user-${Date.now()}`,
-      name: name.trim(),
-      email: email.trim(),
-      phone: trimmedPhone,
-      password: password.trim(),
-      location: "Netrakona Sadar, Mymensingh",
-      loyaltyPoints: 180,
-    };
-
-    const { password: _password, ...user } = nextUser;
-
-    set((state) => ({
-      users: [...state.users, nextUser],
-      user,
-    }));
-
-    return {
-      ok: true,
-      message: "Account created",
-    };
   },
-  signOut: () => set({ user: null }),
+  hydrateMe: async () => {
+    const token = get().accessToken;
+
+    if (!token) {
+      return;
+    }
+
+    try {
+      const user = await getMeRequest(token);
+      set({ user });
+    } catch (_error) {
+      setApiAccessToken(null);
+      set({
+        accessToken: null,
+        user: null,
+      });
+    }
+  },
+  setProfileLocation: (location) =>
+    set((state) => {
+      if (!state.user || state.user.location === location) {
+        return state;
+      }
+
+      return {
+        user: {
+          ...state.user,
+          location,
+        },
+      };
+    }),
+  signOut: () => {
+    setApiAccessToken(null);
+    set({
+      accessToken: null,
+      user: null,
+      isLoading: false,
+    });
+  },
 }));
 
 export function getInitials(name: string) {

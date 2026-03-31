@@ -15,18 +15,18 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { FavoriteButton } from "@/components/favorite-button";
+import { RestaurantCardListSkeleton } from "@/components/restaurant-skeletons";
+import { useDiscoverContentQuery } from "@/lib/content-queries";
 import {
   dummyDiscoverFilters,
-  dummyRestaurants,
 } from "@/lib/customer-data";
 import { useDeliveryLocation } from "@/lib/location-store";
 import {
   formatDistanceKm,
-  applyRestaurantBrowse,
-  getNearbyRestaurants,
   getRestaurantDistanceKm,
   type RestaurantBrowseSort,
 } from "@/lib/restaurant-utils";
+import { useRestaurantsQuery } from "@/lib/restaurant-queries";
 
 const sortOptions: {
   id: RestaurantBrowseSort;
@@ -41,13 +41,15 @@ const sortOptions: {
 export default function SearchResultsScreen() {
   const router = useRouter();
   const deliveryLocation = useDeliveryLocation();
+  const { data: discoverContent } = useDiscoverContentQuery();
   const params = useLocalSearchParams<{ q?: string; filter?: string; sort?: string }>();
   const [searchQuery, setSearchQuery] = useState(params.q ?? "");
   const [filterVisible, setFilterVisible] = useState(false);
+  const availableFilters = discoverContent?.filters ?? dummyDiscoverFilters;
   const [selectedFilter, setSelectedFilter] = useState<
     (typeof dummyDiscoverFilters)[number]["id"]
   >(
-    dummyDiscoverFilters.some((item) => item.id === params.filter)
+    availableFilters.some((item) => item.id === params.filter)
       ? (params.filter as (typeof dummyDiscoverFilters)[number]["id"])
       : "all",
   );
@@ -59,42 +61,24 @@ export default function SearchResultsScreen() {
 
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const trimmedQuery = deferredSearchQuery.trim();
-
-  const filteredRestaurants = useMemo(() => {
-    const query = trimmedQuery.toLowerCase();
-    const sortedRestaurants = applyRestaurantBrowse({
-      restaurants: dummyRestaurants,
-      latitude: deliveryLocation.latitude,
-      longitude: deliveryLocation.longitude,
+  const shouldLimitToNearby =
+    trimmedQuery.length === 0 &&
+    selectedFilter === "all" &&
+    selectedSort === "nearest";
+  const { data: restaurantData, isLoading: restaurantsLoading } =
+    useRestaurantsQuery({
+      q: trimmedQuery || undefined,
+      lat: deliveryLocation.latitude,
+      lng: deliveryLocation.longitude,
+      radiusKm: shouldLimitToNearby ? 3 : undefined,
       filter: selectedFilter,
       sort: selectedSort,
+      limit: 50,
     });
-    const shouldLimitToNearby =
-      query.length === 0 &&
-      selectedFilter === "all" &&
-      selectedSort === "nearest";
-    const sourceRestaurants =
-      shouldLimitToNearby
-        ? getNearbyRestaurants({
-            restaurants: sortedRestaurants,
-            latitude: deliveryLocation.latitude,
-            longitude: deliveryLocation.longitude,
-            radiusKm: 3,
-          })
-        : sortedRestaurants;
 
-    return sourceRestaurants
-      .filter((restaurant) => {
-        const matchesQuery =
-          query.length === 0 ||
-          `${restaurant.name} ${restaurant.cuisine} ${restaurant.tags.join(" ")} ${restaurant.menu
-            .map((item) => `${item.name} ${item.category ?? ""}`)
-            .join(" ")}`
-            .toLowerCase()
-            .includes(query);
-        return matchesQuery;
-      })
-      .map((restaurant) => ({
+  const filteredRestaurants = useMemo(
+    () =>
+      (restaurantData ?? []).map((restaurant) => ({
         restaurant,
         distanceText: formatDistanceKm(
           getRestaurantDistanceKm({
@@ -103,18 +87,13 @@ export default function SearchResultsScreen() {
             longitude: deliveryLocation.longitude,
           }),
         ),
-      }));
-  }, [
-    deliveryLocation.latitude,
-    deliveryLocation.longitude,
-    selectedFilter,
-    selectedSort,
-    trimmedQuery,
-  ]);
+      })),
+    [deliveryLocation.latitude, deliveryLocation.longitude, restaurantData],
+  );
 
   const totalResults = filteredRestaurants.length;
   const activeFilterLabel =
-    dummyDiscoverFilters.find((item) => item.id === selectedFilter)?.label ?? "All";
+    availableFilters.find((item) => item.id === selectedFilter)?.label ?? "All";
   const activeSortLabel =
     sortOptions.find((item) => item.id === selectedSort)?.label ?? "Nearest";
   const summaryTitle = trimmedQuery
@@ -184,7 +163,9 @@ export default function SearchResultsScreen() {
           <Text style={styles.summaryCount}>{totalResults}</Text>
         </View>
 
-        {totalResults === 0 ? (
+        {restaurantsLoading ? (
+          <RestaurantCardListSkeleton count={3} />
+        ) : totalResults === 0 ? (
           <View style={styles.emptyState}>
             <View style={styles.emptyIcon}>
               <Ionicons name="search-outline" size={26} color="#24314A" />
@@ -284,7 +265,7 @@ export default function SearchResultsScreen() {
             <View style={styles.sheetHandle} />
             <Text style={styles.sheetTitle}>Filter search result</Text>
             <View style={styles.sheetOptions}>
-              {dummyDiscoverFilters.map((filter) => {
+              {availableFilters.map((filter) => {
                 const active = selectedFilter === filter.id;
 
                 return (
