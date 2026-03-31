@@ -22,10 +22,11 @@ export default function LoginScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ redirectTo?: string }>();
   const signIn = useAuthStore((state) => state.signIn);
+  const isLoading = useAuthStore((state) => state.isLoading);
   const showToast = useUIStore((state) => state.showToast);
 
-  const [email, setEmail] = useState("ava.rahman@example.com");
-  const [password, setPassword] = useState("123456");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [secureText, setSecureText] = useState(true);
 
   const canSubmit = useMemo(
@@ -34,13 +35,13 @@ export default function LoginScreen() {
   );
   const redirectTarget = resolveAuthRedirectTarget(params.redirectTo);
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     if (!canSubmit) {
       showToast("Email আর password দাও।");
       return;
     }
 
-    const result = signIn({ email, password });
+    const result = await signIn({ email, password });
     showToast(result.message);
 
     if (result.ok) {
@@ -66,14 +67,8 @@ export default function LoginScreen() {
             <Text style={styles.heroEyebrow}>Foodbela</Text>
             <Text style={styles.heroTitle}>Welcome back</Text>
             <Text style={styles.heroText}>
-              Login koro, nearby restaurants, offers, আর live cart একদম ready.
+              Login করো, nearby restaurants, offers, আর live cart একদম ready.
             </Text>
-
-            <View style={styles.demoCard}>
-              <Text style={styles.demoLabel}>Demo account</Text>
-              <Text style={styles.demoValue}>ava.rahman@example.com</Text>
-              <Text style={styles.demoValue}>123456</Text>
-            </View>
           </View>
 
           <View style={styles.formCard}>
@@ -112,10 +107,13 @@ export default function LoginScreen() {
             </View>
 
             <Pressable
-              style={[styles.primaryButton, !canSubmit && styles.buttonDisabled]}
+              style={[styles.primaryButton, (!canSubmit || isLoading) && styles.buttonDisabled]}
               onPress={handleLogin}
+              disabled={!canSubmit || isLoading}
             >
-              <Text style={styles.primaryButtonText}>Login</Text>
+              <Text style={styles.primaryButtonText}>
+                {isLoading ? "Logging in..." : "Login"}
+              </Text>
               <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
             </Pressable>
 
@@ -201,27 +199,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 21,
     color: "#6F6A77",
-  },
-  demoCard: {
-    marginTop: 18,
-    alignSelf: "flex-start",
-    borderRadius: 22,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    backgroundColor: "rgba(255,255,255,0.82)",
-    gap: 4,
-  },
-  demoLabel: {
-    fontSize: 11,
-    fontWeight: "900",
-    color: "#8D8178",
-    textTransform: "uppercase",
-    letterSpacing: 0.7,
-  },
-  demoValue: {
-    fontSize: 13,
-    fontWeight: "800",
-    color: "#20263A",
   },
   formCard: {
     borderRadius: 30,

@@ -6,6 +6,7 @@ import { useDeferredValue, useMemo, useRef, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { RestaurantDetailSkeleton } from "@/components/restaurant-skeletons";
 import {
   type MenuItem,
   type MenuItemAddonGroup,
@@ -13,9 +14,16 @@ import {
   type MenuItemOptionGroup,
   dummyRestaurants,
 } from "@/lib/customer-data";
+import { useAuthStore } from "@/lib/auth-store";
 import { getCartBreakdown, getCartCount, getCartSubtotalTk, useCartStore } from "@/lib/cart-store";
+import {
+  useAddFavoriteMutation,
+  useFavoritesQuery,
+  useRemoveFavoriteMutation,
+} from "@/lib/favorite-queries";
 import { useFavoriteStore } from "@/lib/favorite-store";
 import { useDeliveryLocation } from "@/lib/location-store";
+import { useRestaurantDetailQuery } from "@/lib/restaurant-queries";
 import { formatDistanceKm, getRestaurantDistanceKm } from "@/lib/restaurant-utils";
 import { useUIStore } from "@/lib/ui-store";
 
@@ -151,7 +159,14 @@ function buildCartKey(
 export default function RestaurantDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const restaurant = dummyRestaurants.find((item) => item.id === id) ?? dummyRestaurants[0];
+  const user = useAuthStore((state) => state.user);
+  const { data: restaurantData, isLoading: restaurantLoading } =
+    useRestaurantDetailQuery(id);
+  const fallbackRestaurant = useMemo(
+    () => dummyRestaurants.find((item) => item.id === id) ?? dummyRestaurants[0],
+    [id],
+  );
+  const restaurant = restaurantData ?? fallbackRestaurant;
   const deliveryLocation = useDeliveryLocation();
   const scrollRef = useRef<ScrollView>(null);
   const sectionY = useRef<Record<string, number>>({});
@@ -169,10 +184,18 @@ export default function RestaurantDetailScreen() {
   const couponDiscountTk = useCartStore((state) => state.couponDiscountTk);
   const addItem = useCartStore((state) => state.addItem);
   const decrementItem = useCartStore((state) => state.decrementItem);
-  const favorite = useFavoriteStore((state) =>
-    state.favoriteIds.includes(restaurant.id),
-  );
-  const toggleFavorite = useFavoriteStore((state) => state.toggleFavorite);
+  const guestFavoriteIds = useFavoriteStore((state) => state.favoriteIds);
+  const pendingFavoriteIds = useFavoriteStore((state) => state.pendingFavoriteIds);
+  const toggleGuestFavorite = useFavoriteStore((state) => state.toggleGuestFavorite);
+  const markFavoritePending = useFavoriteStore((state) => state.markFavoritePending);
+  const clearFavoritePending = useFavoriteStore((state) => state.clearFavoritePending);
+  const { data: favoritesData } = useFavoritesQuery(Boolean(user?.id));
+  const addFavoriteMutation = useAddFavoriteMutation();
+  const removeFavoriteMutation = useRemoveFavoriteMutation();
+  const favorite = user
+    ? (favoritesData?.favoriteIds ?? []).includes(restaurant.id)
+    : guestFavoriteIds.includes(restaurant.id);
+  const favoritePending = pendingFavoriteIds.includes(restaurant.id);
   const showToast = useUIStore((state) => state.showToast);
   const cartEntries = useMemo(() => Object.values(cart), [cart]);
   const itemQuantities = useMemo(
@@ -225,6 +248,12 @@ export default function RestaurantDetailScreen() {
       ),
     [deliveryLocation.latitude, deliveryLocation.longitude, restaurant],
   );
+  const primaryOffer = restaurant.offers?.[0] ?? null;
+  const offerTitle =
+    primaryOffer?.shortLabel || primaryOffer?.title || "Selected restaurant offer";
+  const offerText = primaryOffer?.code
+    ? `${primaryOffer.description || "Use the code in cart when eligible."} Code: ${primaryOffer.code}`
+    : primaryOffer?.description || "Check cart to see the active offer for this restaurant.";
 
   const cartCount = getCartCount(cart);
   const cartTotal = getCartSubtotalTk(cart);
@@ -351,6 +380,50 @@ export default function RestaurantDetailScreen() {
     if (current !== activeTab) setActiveTab(current);
   };
 
+  const handleToggleFavorite = async () => {
+    if (favoritePending) {
+      showToast("একটু wait করো...");
+      return;
+    }
+
+    if (!user) {
+      toggleGuestFavorite(restaurant.id);
+      return;
+    }
+
+    markFavoritePending(restaurant.id);
+
+    try {
+      if (favorite) {
+        await removeFavoriteMutation.mutateAsync(restaurant.id);
+      } else {
+        await addFavoriteMutation.mutateAsync(restaurant.id);
+      }
+    } catch (error) {
+      showToast(
+        error instanceof Error
+          ? error.message
+          : "Unable to update favourites right now.",
+      );
+    } finally {
+      clearFavoritePending(restaurant.id);
+    }
+  };
+
+  if (restaurantLoading && !restaurantData) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <StatusBar style="dark" backgroundColor="#FFF7F2" />
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.content}
+        >
+          <RestaurantDetailSkeleton />
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <StatusBar style="dark" backgroundColor="#FFF7F2" />
@@ -372,7 +445,7 @@ export default function RestaurantDetailScreen() {
             </Pressable>
             <Pressable
               style={styles.iconBtn}
-              onPress={() => toggleFavorite(restaurant.id)}
+              onPress={() => void handleToggleFavorite()}
             >
               <Ionicons name={favorite ? "heart" : "heart-outline"} size={20} color={favorite ? "#FF5D8F" : "#20263A"} />
             </Pressable>
@@ -398,15 +471,17 @@ export default function RestaurantDetailScreen() {
           </View>
         </View>
 
-        <View style={styles.offer}>
-          <View style={styles.offerIcon}>
-            <Ionicons name="pricetag" size={16} color="#FF5D8F" />
+        {primaryOffer ? (
+          <View style={styles.offer}>
+            <View style={styles.offerIcon}>
+              <Ionicons name="pricetag" size={16} color="#FF5D8F" />
+            </View>
+            <View style={styles.offerCopy}>
+              <Text style={styles.offerTitle}>{offerTitle}</Text>
+              <Text style={styles.offerText}>{offerText}</Text>
+            </View>
           </View>
-          <View style={styles.offerCopy}>
-            <Text style={styles.offerTitle}>50% off (YUMMELA)</Text>
-            <Text style={styles.offerText}>Min. order TK 199 for all items. Use in cart.</Text>
-          </View>
-        </View>
+        ) : null}
 
         <View style={styles.stickyWrap}>
           <View style={styles.search}>

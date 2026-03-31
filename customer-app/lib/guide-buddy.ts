@@ -131,6 +131,18 @@ export function getGuideBuddyTrackingTip(
     };
   }
 
+  if (order.status === "Ready for pickup") {
+    return {
+      id: `tracking-${order.id}-ready`,
+      title: "Restaurant complete à¦•à¦°à§‡à¦›à§‡",
+      message:
+        order.riderName
+          ? `${order.riderName} order-ta accept koreche. Ekhn she restaurant theke pickup korlei tomar next live update dekhabo.`
+          : "à¦¤à§‹à¦®à¦¾à¦° order pickup-à¦à¦° à¦œà¦¨à§à¦¯ ready à¦†à¦›à§‡à¥¤ à¦à¦–à¦¨ delivery partner accept à¦•à¦°à¦²à§‡ à¦†à¦¬à¦¾à¦° next update à¦ªà¦¾à¦¬à§‡à¥¤",
+      emotion: "thinking",
+    };
+  }
+
   if (order.status === "On the way") {
     return {
       id: `tracking-${order.id}-ontheway`,

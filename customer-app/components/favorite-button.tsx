@@ -1,8 +1,15 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Pressable, StyleProp, StyleSheet, ViewStyle } from "react-native";
 
+import { useAuthStore } from "@/lib/auth-store";
+import {
+  useAddFavoriteMutation,
+  useFavoritesQuery,
+  useRemoveFavoriteMutation,
+} from "@/lib/favorite-queries";
 import { useFavoriteStore } from "@/lib/favorite-store";
 import { emitGuideBuddyEvent } from "@/lib/guide-buddy";
+import { useUIStore } from "@/lib/ui-store";
 
 type FavoriteButtonProps = {
   restaurantId: string;
@@ -13,17 +20,56 @@ export function FavoriteButton({
   restaurantId,
   style,
 }: FavoriteButtonProps) {
-  const isFavorite = useFavoriteStore((state) =>
-    state.favoriteIds.includes(restaurantId),
-  );
-  const toggleFavorite = useFavoriteStore((state) => state.toggleFavorite);
+  const user = useAuthStore((state) => state.user);
+  const showToast = useUIStore((state) => state.showToast);
+  const guestFavoriteIds = useFavoriteStore((state) => state.favoriteIds);
+  const pendingFavoriteIds = useFavoriteStore((state) => state.pendingFavoriteIds);
+  const toggleGuestFavorite = useFavoriteStore((state) => state.toggleGuestFavorite);
+  const markFavoritePending = useFavoriteStore((state) => state.markFavoritePending);
+  const clearFavoritePending = useFavoriteStore((state) => state.clearFavoritePending);
+  const { data: favoritesData } = useFavoritesQuery(Boolean(user?.id));
+  const addFavoriteMutation = useAddFavoriteMutation();
+  const removeFavoriteMutation = useRemoveFavoriteMutation();
+  const serverFavoriteIds = favoritesData?.favoriteIds ?? [];
+  const isPending = pendingFavoriteIds.includes(restaurantId);
+  const isFavorite = user
+    ? serverFavoriteIds.includes(restaurantId)
+    : guestFavoriteIds.includes(restaurantId);
 
   return (
     <Pressable
-      onPress={(event) => {
+      onPress={async (event) => {
         event.stopPropagation();
-        toggleFavorite(restaurantId);
-        emitGuideBuddyEvent("favorite_toggled");
+
+        if (isPending) {
+          showToast("একটু wait করো...");
+          return;
+        }
+
+        if (!user) {
+          toggleGuestFavorite(restaurantId);
+          emitGuideBuddyEvent("favorite_toggled");
+          return;
+        }
+
+        markFavoritePending(restaurantId);
+
+        try {
+          if (isFavorite) {
+            await removeFavoriteMutation.mutateAsync(restaurantId);
+          } else {
+            await addFavoriteMutation.mutateAsync(restaurantId);
+          }
+          emitGuideBuddyEvent("favorite_toggled");
+        } catch (error) {
+          showToast(
+            error instanceof Error
+              ? error.message
+              : "Unable to update favourites right now.",
+          );
+        } finally {
+          clearFavoritePending(restaurantId);
+        }
       }}
       style={[styles.button, style]}
       hitSlop={8}

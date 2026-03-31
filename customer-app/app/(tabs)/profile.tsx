@@ -5,10 +5,10 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { getInitials, useAuthStore } from "@/lib/auth-store";
+import { useActiveOrdersQuery, useOrderHistoryQuery } from "@/lib/order-queries";
 import { profileOptions } from "@/lib/customer-data";
 import { useSavedLocations } from "@/lib/location-store";
 import { getUnreadNotificationCount, useNotificationStore } from "@/lib/notification-store";
-import { useOrderStore } from "@/lib/order-store";
 import { getRewardsProfile } from "@/lib/rewards";
 import { useUIStore } from "@/lib/ui-store";
 
@@ -18,8 +18,8 @@ export default function ProfileScreen() {
   const signOut = useAuthStore((state) => state.signOut);
   const savedLocations = useSavedLocations();
   const notifications = useNotificationStore((state) => state.notifications);
-  const activeOrders = useOrderStore((state) => state.activeOrders);
-  const previousOrders = useOrderStore((state) => state.previousOrders);
+  const { data: activeOrders = [] } = useActiveOrdersQuery(Boolean(user?.id));
+  const { data: previousOrders = [] } = useOrderHistoryQuery(Boolean(user?.id));
   const showToast = useUIStore((state) => state.showToast);
   const unreadNotifications = getUnreadNotificationCount(notifications);
   const totalOrders = previousOrders.length + activeOrders.length;

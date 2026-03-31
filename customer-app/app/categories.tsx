@@ -4,10 +4,14 @@ import { useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { CategoriesGridSkeleton } from "@/components/content-skeletons";
 import { dummyCategories } from "@/lib/customer-data";
+import { useCategoriesQuery } from "@/lib/content-queries";
 
 export default function CategoriesScreen() {
   const router = useRouter();
+  const { data: categoriesData, isLoading } = useCategoriesQuery();
+  const categories = categoriesData ?? dummyCategories;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
@@ -35,38 +39,42 @@ export default function CategoriesScreen() {
           </Text>
         </View>
 
-        <View style={styles.grid}>
-          {dummyCategories.map((category) => (
-            <Pressable
-              key={category.id}
-              style={styles.categoryCard}
-              onPress={() =>
-                router.push({
-                  pathname: "/search-results",
-                  params: { q: category.label, filter: "all", sort: "nearest" },
-                })
-              }
-            >
-              <View
-                style={[
-                  styles.categoryIconWrap,
-                  { backgroundColor: category.accent },
-                ]}
+        {isLoading ? (
+          <CategoriesGridSkeleton />
+        ) : (
+          <View style={styles.grid}>
+            {categories.map((category) => (
+              <Pressable
+                key={category.id}
+                style={styles.categoryCard}
+                onPress={() =>
+                  router.push({
+                    pathname: "/search-results",
+                    params: { q: category.label, filter: "all", sort: "nearest" },
+                  })
+                }
               >
-                <Ionicons
-                  name={category.icon as never}
-                  size={22}
-                  color="#20263A"
-                />
-              </View>
-              <Text style={styles.categoryLabel}>{category.label}</Text>
-              <View style={styles.categoryCta}>
-                <Text style={styles.categoryCtaText}>Explore</Text>
-                <Ionicons name="arrow-forward" size={14} color="#20263A" />
-              </View>
-            </Pressable>
-          ))}
-        </View>
+                <View
+                  style={[
+                    styles.categoryIconWrap,
+                    { backgroundColor: category.accent },
+                  ]}
+                >
+                  <Ionicons
+                    name={category.icon as never}
+                    size={22}
+                    color="#20263A"
+                  />
+                </View>
+                <Text style={styles.categoryLabel}>{category.label}</Text>
+                <View style={styles.categoryCta}>
+                  <Text style={styles.categoryCtaText}>Explore</Text>
+                  <Ionicons name="arrow-forward" size={14} color="#20263A" />
+                </View>
+              </Pressable>
+            ))}
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );

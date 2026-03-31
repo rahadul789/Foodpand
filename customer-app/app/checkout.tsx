@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { useMemo, useState } from "react";
+import { useDeferredValue, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -14,16 +14,16 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { useSelectDeliveryLocationMutation } from "@/lib/address-queries";
 import { useAuthStore } from "@/lib/auth-store";
 import { getCartBreakdown, useCartStore } from "@/lib/cart-store";
-import { dummyRestaurants } from "@/lib/customer-data";
 import { emitGuideBuddyEvent } from "@/lib/guide-buddy";
 import {
   setDeliveryLocation,
   useDeliveryLocation,
   useSavedLocations,
 } from "@/lib/location-store";
-import { useOrderStore } from "@/lib/order-store";
+import { useCreateOrderMutation, useOrderQuoteQuery } from "@/lib/order-queries";
 import { getPaymentMethodMeta, usePaymentStore } from "@/lib/payment-store";
 import { useUIStore } from "@/lib/ui-store";
 
@@ -34,14 +34,16 @@ export default function CheckoutScreen() {
   const restaurantId = useCartStore((state) => state.restaurantId);
   const thresholdOffer = useCartStore((state) => state.thresholdOffer);
   const couponDiscountTk = useCartStore((state) => state.couponDiscountTk);
+  const appliedCoupon = useCartStore((state) => state.appliedCoupon);
   const clearCart = useCartStore((state) => state.clearCart);
-  const placeOrderFromCart = useOrderStore((state) => state.placeOrderFromCart);
   const showToast = useUIStore((state) => state.showToast);
   const selectedPaymentMethod = usePaymentStore(
     (state) => state.selectedMethod,
   );
   const location = useDeliveryLocation();
   const savedLocations = useSavedLocations();
+  const selectDeliveryLocationMutation = useSelectDeliveryLocationMutation();
+  const createOrderMutation = useCreateOrderMutation();
 
   const [placingOrder, setPlacingOrder] = useState(false);
 
@@ -50,6 +52,93 @@ export default function CheckoutScreen() {
     couponDiscountTk,
     thresholdOffer,
   });
+  const quotePayload = useMemo(
+    () => ({
+      restaurantId: restaurantId ?? "",
+      items: Object.values(items)
+        .sort((left, right) => left.cartKey.localeCompare(right.cartKey))
+        .map((item) => ({
+          itemId: item.itemId,
+          quantity: item.quantity,
+          unitTk: item.unitTk,
+          summary: item.summary,
+        })),
+      couponCode: appliedCoupon,
+    }),
+    [appliedCoupon, items, restaurantId],
+  );
+  const deferredQuotePayload = useDeferredValue(quotePayload);
+  const {
+    data: quote,
+    error: quoteError,
+    isFetching: isQuoteFetching,
+  } = useOrderQuoteQuery(
+    deferredQuotePayload,
+    Boolean(restaurantId && deferredQuotePayload.items.length > 0),
+  );
+  const localThresholdOffer = useMemo(
+    () =>
+      !appliedCoupon && breakdown.thresholdReached
+        ? {
+            type: "threshold_discount",
+            title: "Restaurant offer",
+            shortLabel: `TK ${breakdown.thresholdDiscountValueTk} OFF`,
+            code: "",
+            discountTk: breakdown.thresholdDiscountTk,
+            freeDeliveryApplied: false,
+            isAutoApply: true,
+          }
+        : undefined,
+    [
+      appliedCoupon,
+      breakdown.thresholdDiscountTk,
+      breakdown.thresholdDiscountValueTk,
+      breakdown.thresholdReached,
+    ],
+  );
+  const pricing = useMemo(() => {
+    const shouldPreferLocalThreshold =
+      !appliedCoupon &&
+      breakdown.thresholdReached &&
+      (quote?.discountTk ?? 0) < breakdown.thresholdDiscountTk;
+
+    if (shouldPreferLocalThreshold) {
+      return {
+        subtotalTk: breakdown.subtotalTk,
+        deliveryTk: breakdown.deliveryTk,
+        serviceFeeTk: breakdown.serviceFeeTk,
+        discountTk: breakdown.discountTk,
+        totalTk: breakdown.totalTk,
+        couponCode: null,
+        appliedOffer: localThresholdOffer,
+      };
+    }
+
+    return (
+      quote ?? {
+        subtotalTk: breakdown.subtotalTk,
+        deliveryTk: breakdown.deliveryTk,
+        serviceFeeTk: breakdown.serviceFeeTk,
+        discountTk: breakdown.discountTk,
+        totalTk: breakdown.totalTk,
+        couponCode: appliedCoupon,
+        appliedOffer: localThresholdOffer,
+      }
+    );
+  }, [
+    appliedCoupon,
+    breakdown.deliveryTk,
+    breakdown.discountTk,
+    breakdown.serviceFeeTk,
+    breakdown.subtotalTk,
+    breakdown.thresholdDiscountTk,
+    breakdown.thresholdReached,
+    breakdown.totalTk,
+    localThresholdOffer,
+    quote,
+  ]);
+  const appliedOffer = pricing.appliedOffer;
+  const offerLineLabel = appliedOffer?.title || "Offer";
   const paymentMethod = useMemo(
     () => getPaymentMethodMeta(selectedPaymentMethod),
     [selectedPaymentMethod],
@@ -66,38 +155,37 @@ export default function CheckoutScreen() {
       return;
     }
 
-    const restaurant = dummyRestaurants.find(
-      (entry) => entry.id === restaurantId,
-    );
-
-    if (!restaurant) {
-      showToast("Restaurant information is unavailable right now.");
+    if (quoteError) {
+      showToast(
+        quoteError instanceof Error
+          ? quoteError.message
+          : "Please review your cart summary once.",
+      );
       return;
     }
 
     setPlacingOrder(true);
 
     try {
-      const result = placeOrderFromCart({
-        restaurant,
+      const order = await createOrderMutation.mutateAsync({
+        restaurantId,
         items: Object.values(items).map((item) => ({
-          cartKey: item.cartKey,
           itemId: item.itemId,
-          name: item.name,
           quantity: item.quantity,
           unitTk: item.unitTk,
           summary: item.summary,
         })),
-        subtotalTk: breakdown.subtotalTk,
-        deliveryTk: breakdown.deliveryTk,
-        serviceFeeTk: breakdown.serviceFeeTk,
-        discountTk: breakdown.discountTk,
-        totalTk: breakdown.totalTk,
+        subtotalTk: pricing.subtotalTk,
+        deliveryTk: pricing.deliveryTk,
+        serviceFeeTk: pricing.serviceFeeTk,
+        discountTk: pricing.discountTk,
+        totalTk: pricing.totalTk,
         paymentMethod: selectedPaymentMethod,
         deliveryAddress: [location.label, location.subtitle]
           .filter(Boolean)
           .join(", "),
         note: "Rider will call on arrival.",
+        couponCode: appliedCoupon,
       });
 
       clearCart();
@@ -110,11 +198,47 @@ export default function CheckoutScreen() {
           fresh: "1",
           locked: "1",
           payment: selectedPaymentMethod,
-          orderId: result.order.id,
+          orderId: order.id,
         },
       });
+    } catch (error) {
+      showToast(
+        error instanceof Error
+          ? error.message
+          : "Unable to place the order right now.",
+      );
     } finally {
       setPlacingOrder(false);
+    }
+  };
+
+  const handleSelectSavedLocation = async (
+    savedLocation: (typeof savedLocations)[number],
+  ) => {
+    const previousLocation = location;
+    setDeliveryLocation(savedLocation);
+
+    if (!user) {
+      showToast("Delivery location updated.");
+      return;
+    }
+
+    try {
+      await selectDeliveryLocationMutation.mutateAsync({
+        addressId: savedLocation.id,
+        label: savedLocation.label,
+        subtitle: savedLocation.subtitle,
+        latitude: savedLocation.latitude,
+        longitude: savedLocation.longitude,
+      });
+      showToast("Delivery location updated.");
+    } catch (error) {
+      setDeliveryLocation(previousLocation);
+      showToast(
+        error instanceof Error
+          ? error.message
+          : "Unable to update delivery location.",
+      );
     }
   };
 
@@ -200,10 +324,8 @@ export default function CheckoutScreen() {
                     styles.savedLocationCard,
                     isSelected && styles.savedLocationCardSelected,
                   ]}
-                  onPress={() => {
-                    setDeliveryLocation(savedLocation);
-                    showToast("Delivery location updated.");
-                  }}
+                  disabled={selectDeliveryLocationMutation.isPending}
+                  onPress={() => void handleSelectSavedLocation(savedLocation)}
                 >
                   <View style={styles.savedLocationCardTop}>
                     <View style={styles.savedLocationIcon}>
@@ -303,41 +425,37 @@ export default function CheckoutScreen() {
 
         <View style={styles.billCard}>
           <Text style={styles.billHeading}>Payment summary</Text>
+          {isQuoteFetching ? (
+            <Text style={styles.billHint}>Checking latest restaurant pricing...</Text>
+          ) : null}
+          {quoteError ? (
+            <Text style={styles.billError}>
+              {quoteError instanceof Error
+                ? quoteError.message
+                : "Offer verification failed. Please review your cart."}
+            </Text>
+          ) : null}
           <View style={styles.billRow}>
             <Text style={styles.billLabel}>Items</Text>
-            <Text style={styles.billValue}>TK {breakdown.subtotalTk}</Text>
+            <Text style={styles.billValue}>TK {pricing.subtotalTk}</Text>
           </View>
           <View style={styles.billRow}>
             <Text style={styles.billLabel}>Delivery</Text>
-            <Text style={styles.billValue}>TK {breakdown.deliveryTk}</Text>
+            <Text style={styles.billValue}>TK {pricing.deliveryTk}</Text>
           </View>
           <View style={styles.billRow}>
             <Text style={styles.billLabel}>Service fee</Text>
-            <Text style={styles.billValue}>TK {breakdown.serviceFeeTk}</Text>
+            <Text style={styles.billValue}>TK {pricing.serviceFeeTk}</Text>
           </View>
-          <View style={styles.billRow}>
-            <Text style={styles.billLabel}>Discount</Text>
-            <Text style={styles.billValue}>-TK {breakdown.discountTk}</Text>
-          </View>
-          {breakdown.thresholdDiscountTk > 0 ? (
+          {pricing.discountTk > 0 ? (
             <View style={styles.billRow}>
-              <Text style={styles.billLabel}>Threshold offer</Text>
-              <Text style={styles.billValue}>
-                -TK {breakdown.thresholdDiscountTk}
-              </Text>
-            </View>
-          ) : null}
-          {breakdown.couponDiscountTk > 0 ? (
-            <View style={styles.billRow}>
-              <Text style={styles.billLabel}>Coupon</Text>
-              <Text style={styles.billValue}>
-                -TK {breakdown.couponDiscountTk}
-              </Text>
+              <Text style={styles.billLabel}>{offerLineLabel}</Text>
+              <Text style={styles.billValue}>-TK {pricing.discountTk}</Text>
             </View>
           ) : null}
           <View style={[styles.billRow, styles.billStrongRow]}>
             <Text style={styles.billStrongLabel}>Total to pay</Text>
-            <Text style={styles.billStrongValue}>TK {breakdown.totalTk}</Text>
+            <Text style={styles.billStrongValue}>TK {pricing.totalTk}</Text>
           </View>
         </View>
 
@@ -587,6 +705,8 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   billHeading: { fontSize: 20, fontWeight: "900", color: "#20263A" },
+  billHint: { fontSize: 12, color: "#7B6F69" },
+  billError: { fontSize: 12, lineHeight: 18, color: "#D14D72" },
   billRow: { flexDirection: "row", justifyContent: "space-between", gap: 12 },
   billLabel: { fontSize: 14, color: "#7B6F69" },
   billValue: { fontSize: 14, fontWeight: "800", color: "#20263A" },

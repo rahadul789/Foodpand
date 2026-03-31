@@ -14,19 +14,24 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import {
+  CategoryRailSkeleton,
+  FilterChipsSkeleton,
+} from "@/components/content-skeletons";
 import { FavoriteButton } from "@/components/favorite-button";
+import { RestaurantCardListSkeleton } from "@/components/restaurant-skeletons";
+import { useDiscoverContentQuery } from "@/lib/content-queries";
 import {
   dummyCategories,
   dummyDiscoverFilters,
-  dummyRestaurants,
 } from "@/lib/customer-data";
 import { useDeliveryLocation } from "@/lib/location-store";
 import {
   formatDistanceKm,
-  applyRestaurantBrowse,
   getRestaurantDistanceKm,
   type RestaurantBrowseSort,
 } from "@/lib/restaurant-utils";
+import { useRestaurantsQuery } from "@/lib/restaurant-queries";
 
 const sortOptions: {
   id: RestaurantBrowseSort;
@@ -41,35 +46,33 @@ const sortOptions: {
 export default function DiscoverScreen() {
   const router = useRouter();
   const deliveryLocation = useDeliveryLocation();
+  const { data: discoverContent, isLoading: discoverContentLoading } =
+    useDiscoverContentQuery();
   const [searchQuery, setSearchQuery] = useState("");
   const [recentSearches, setRecentSearches] = useState([
     "Pizza",
     "Burger",
     "Dessert",
   ]);
-  const [selectedFilter, setSelectedFilter] = useState<
-    (typeof dummyDiscoverFilters)[number]["id"]
-  >("all");
+  const availableFilters = discoverContent?.filters ?? dummyDiscoverFilters;
+  const availableCategories = discoverContent?.categories ?? dummyCategories;
+  const [selectedFilter, setSelectedFilter] = useState<"all" | "rating-3" | "rating-4" | "under-30" | "offers">("all");
   const [selectedSort, setSelectedSort] =
     useState<RestaurantBrowseSort>("nearest");
   const [filterVisible, setFilterVisible] = useState(false);
+  const { data: restaurantData, isLoading: restaurantsLoading } =
+    useRestaurantsQuery({
+      lat: deliveryLocation.latitude,
+      lng: deliveryLocation.longitude,
+      filter: selectedFilter,
+      sort: selectedSort,
+      limit: 50,
+    });
 
   const trimmedQuery = searchQuery.trim();
   const allRestaurants = useMemo(
-    () =>
-      applyRestaurantBrowse({
-        restaurants: dummyRestaurants,
-        latitude: deliveryLocation.latitude,
-        longitude: deliveryLocation.longitude,
-        filter: selectedFilter,
-        sort: selectedSort,
-      }),
-    [
-      deliveryLocation.latitude,
-      deliveryLocation.longitude,
-      selectedFilter,
-      selectedSort,
-    ],
+    () => restaurantData ?? [],
+    [restaurantData],
   );
   const allRestaurantsWithDistance = useMemo(
     () =>
@@ -85,9 +88,9 @@ export default function DiscoverScreen() {
       })),
     [
       allRestaurants,
-      deliveryLocation.latitude,
-      deliveryLocation.longitude,
-    ],
+        deliveryLocation.latitude,
+        deliveryLocation.longitude,
+      ],
   );
 
   const pushRecentSearch = (value: string) => {
@@ -172,40 +175,46 @@ export default function DiscoverScreen() {
             ) : null}
           </View>
 
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filterRow}
-          >
-            {dummyDiscoverFilters.map((filter) => {
-              const active = selectedFilter === filter.id;
+          {discoverContentLoading ? (
+            <View style={styles.filterSkeletonWrap}>
+              <FilterChipsSkeleton />
+            </View>
+          ) : (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filterRow}
+            >
+              {availableFilters.map((filter) => {
+                const active = selectedFilter === filter.id;
 
-              return (
-                <Pressable
-                  key={filter.id}
-                  style={[
-                    styles.filterChip,
-                    { backgroundColor: active ? "#24314A" : filter.color },
-                  ]}
-                  onPress={() => setSelectedFilter(filter.id)}
-                >
-                  <Ionicons
-                    name={filter.icon as never}
-                    size={14}
-                    color={active ? "#FFFFFF" : "#24314A"}
-                  />
-                  <Text
+                return (
+                  <Pressable
+                    key={filter.id}
                     style={[
-                      styles.filterChipText,
-                      { color: active ? "#FFFFFF" : "#24314A" },
+                      styles.filterChip,
+                      { backgroundColor: active ? "#24314A" : filter.color },
                     ]}
+                    onPress={() => setSelectedFilter(filter.id)}
                   >
-                    {filter.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+                    <Ionicons
+                      name={filter.icon as never}
+                      size={14}
+                      color={active ? "#FFFFFF" : "#24314A"}
+                    />
+                    <Text
+                      style={[
+                        styles.filterChipText,
+                        { color: active ? "#FFFFFF" : "#24314A" },
+                      ]}
+                    >
+                      {filter.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          )}
           <View style={styles.sortPreviewRow}>
             <Text style={styles.sortPreviewLabel}>Sort</Text>
             <View style={styles.sortPreviewPill}>
@@ -220,98 +229,106 @@ export default function DiscoverScreen() {
           action="See all"
           onPress={() => router.push("/categories")}
         />
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.categoryRail}
-        >
-          {dummyCategories.map((category) => (
-            <Pressable
-              key={category.id}
-              style={styles.categoryCard}
-              onPress={() => {
-                setSearchQuery(category.label);
-                openSearchResults(category.label);
-              }}
-            >
-              <View
-                style={[
-                  styles.categoryIconWrap,
-                  { backgroundColor: category.accent },
-                ]}
+        {discoverContentLoading ? (
+          <CategoryRailSkeleton />
+        ) : (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.categoryRail}
+          >
+            {availableCategories.map((category) => (
+              <Pressable
+                key={category.id}
+                style={styles.categoryCard}
+                onPress={() => {
+                  setSearchQuery(category.label);
+                  openSearchResults(category.label);
+                }}
               >
-                <Ionicons
-                  name={category.icon as never}
-                  size={20}
-                  color="#20263A"
-                />
-              </View>
-              <Text style={styles.categoryLabel}>{category.label}</Text>
-            </Pressable>
-          ))}
-        </ScrollView>
+                <View
+                  style={[
+                    styles.categoryIconWrap,
+                    { backgroundColor: category.accent },
+                  ]}
+                >
+                  <Ionicons
+                    name={category.icon as never}
+                    size={20}
+                    color="#20263A"
+                  />
+                </View>
+                <Text style={styles.categoryLabel}>{category.label}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        )}
 
         <View style={styles.discoveryIntro}>
           <SectionHeader
             title="All restaurants"
             action={`${allRestaurantsWithDistance.length}`}
           />
-          <View style={styles.nearbyList}>
-            {allRestaurantsWithDistance.map(({ restaurant, distanceText }) => (
-              <View
-                key={restaurant.id}
-                style={styles.nearbyCard}
-              >
-                <Pressable
-                  style={styles.restaurantPressable}
-                  onPress={() =>
-                    router.push({
-                      pathname: "/restaurant/[id]",
-                      params: { id: restaurant.id },
-                    })
-                  }
+          {restaurantsLoading ? (
+            <RestaurantCardListSkeleton count={4} />
+          ) : (
+            <View style={styles.nearbyList}>
+              {allRestaurantsWithDistance.map(({ restaurant, distanceText }) => (
+                <View
+                  key={restaurant.id}
+                  style={styles.nearbyCard}
                 >
-                  <Image
-                    source={{ uri: restaurant.coverImage }}
-                    style={styles.nearbyImage}
-                    contentFit="cover"
-                  />
-                  <View style={styles.nearbyBody}>
-                    <View style={styles.nearbyTop}>
-                      <Text style={styles.nearbyName}>{restaurant.name}</Text>
-                      <View style={styles.nearbyRating}>
-                        <Ionicons name="star" size={11} color="#F29D18" />
-                        <Text style={styles.nearbyRatingText}>
-                          {restaurant.rating.toFixed(1)}
-                        </Text>
+                  <Pressable
+                    style={styles.restaurantPressable}
+                    onPress={() =>
+                      router.push({
+                        pathname: "/restaurant/[id]",
+                        params: { id: restaurant.id },
+                      })
+                    }
+                  >
+                    <Image
+                      source={{ uri: restaurant.coverImage }}
+                      style={styles.nearbyImage}
+                      contentFit="cover"
+                    />
+                    <View style={styles.nearbyBody}>
+                      <View style={styles.nearbyTop}>
+                        <Text style={styles.nearbyName}>{restaurant.name}</Text>
+                        <View style={styles.nearbyRating}>
+                          <Ionicons name="star" size={11} color="#F29D18" />
+                          <Text style={styles.nearbyRatingText}>
+                            {restaurant.rating.toFixed(1)}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={styles.nearbyMeta}>
+                        {restaurant.cuisine} | {restaurant.deliveryTime}
+                      </Text>
+                      <View style={styles.nearbyBottom}>
+                        <Text style={styles.nearbyDistance}>{distanceText}</Text>
+                        {restaurant.voucher ? (
+                          <View style={styles.voucherPill}>
+                            <Ionicons name="ticket-outline" size={11} color="#FF5D8F" />
+                            <Text style={styles.voucherText}>{restaurant.voucher}</Text>
+                          </View>
+                        ) : restaurant.featured ? (
+                          <View style={styles.featuredPill}>
+                            <Ionicons name="sparkles-outline" size={11} color="#5C7CFA" />
+                            <Text style={styles.featuredText}>Featured</Text>
+                          </View>
+                        ) : null}
                       </View>
                     </View>
-                    <Text style={styles.nearbyMeta}>
-                      {restaurant.cuisine} | {restaurant.deliveryTime}
-                    </Text>
-                    <View style={styles.nearbyBottom}>
-                      <Text style={styles.nearbyDistance}>{distanceText}</Text>
-                      {restaurant.voucher ? (
-                        <View style={styles.voucherPill}>
-                          <Ionicons name="ticket-outline" size={11} color="#FF5D8F" />
-                          <Text style={styles.voucherText}>{restaurant.voucher}</Text>
-                        </View>
-                      ) : restaurant.featured ? (
-                        <View style={styles.featuredPill}>
-                          <Ionicons name="sparkles-outline" size={11} color="#5C7CFA" />
-                          <Text style={styles.featuredText}>Featured</Text>
-                        </View>
-                      ) : null}
-                    </View>
-                  </View>
-                </Pressable>
-                <FavoriteButton
-                  restaurantId={restaurant.id}
-                  style={styles.favoriteButton}
-                />
-              </View>
-            ))}
-          </View>
+                  </Pressable>
+                  <FavoriteButton
+                    restaurantId={restaurant.id}
+                    style={styles.favoriteButton}
+                  />
+                </View>
+              ))}
+            </View>
+          )}
 
           <SectionHeader title="Recent search" action={`${recentSearches.length}`} />
           <View style={styles.recentList}>
@@ -350,7 +367,7 @@ export default function DiscoverScreen() {
             <View style={styles.sheetHandle} />
             <Text style={styles.sheetTitle}>Filter discover</Text>
             <View style={styles.sheetOptions}>
-              {dummyDiscoverFilters.map((filter) => {
+              {availableFilters.map((filter) => {
                 const active = selectedFilter === filter.id;
 
                 return (
@@ -539,6 +556,9 @@ const styles = StyleSheet.create({
     marginTop: 14,
     gap: 10,
     paddingRight: 10,
+  },
+  filterSkeletonWrap: {
+    marginTop: 14,
   },
   filterChip: {
     flexDirection: "row",

@@ -1,10 +1,15 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { GuideBuddyOverlay } from "@/components/guide-buddy";
+import { useAddressesQuery } from "@/lib/address-queries";
+import { useAuthStore } from "@/lib/auth-store";
 import { useCartStore } from "@/lib/cart-store";
+import { resetGuestLocations, syncLocationsFromBackend } from "@/lib/location-store";
+import { queryClient } from "@/lib/query-client";
 import { useUIStore } from "@/lib/ui-store";
 
 function GlobalToast() {
@@ -102,9 +107,28 @@ function GlobalCartSwitchModal() {
   );
 }
 
+function LocationSyncGate() {
+  const user = useAuthStore((state) => state.user);
+  const userId = user?.id ?? null;
+  const { data } = useAddressesQuery(Boolean(userId));
+
+  useEffect(() => {
+    if (userId && data) {
+      syncLocationsFromBackend(data);
+      return;
+    }
+
+    if (!userId) {
+      resetGuestLocations();
+    }
+  }, [data, userId]);
+
+  return null;
+}
+
 export default function RootLayout() {
   return (
-    <>
+    <QueryClientProvider client={queryClient}>
       <StatusBar style="auto" />
       <Stack
         screenOptions={{
@@ -112,10 +136,11 @@ export default function RootLayout() {
           animation: "slide_from_right",
         }}
       />
+      <LocationSyncGate />
       <GuideBuddyOverlay />
       <GlobalCartSwitchModal />
       <GlobalToast />
-    </>
+    </QueryClientProvider>
   );
 }
 

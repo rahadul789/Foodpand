@@ -22,6 +22,7 @@ export default function SignupScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ redirectTo?: string }>();
   const signUp = useAuthStore((state) => state.signUp);
+  const isLoading = useAuthStore((state) => state.isLoading);
   const showToast = useUIStore((state) => state.showToast);
 
   const [name, setName] = useState("");
@@ -41,7 +42,7 @@ export default function SignupScreen() {
   );
   const redirectTarget = resolveAuthRedirectTarget(params.redirectTo);
 
-  const handleSignup = () => {
+  const handleSignup = async () => {
     if (!canSubmit) {
       showToast("সব field ঠিকমতো fill up করো।");
       return;
@@ -52,7 +53,7 @@ export default function SignupScreen() {
       return;
     }
 
-    const result = signUp({ name, email, phone, password });
+    const result = await signUp({ name, email, phone, password });
     showToast(result.message);
 
     if (result.ok) {
@@ -90,9 +91,9 @@ export default function SignupScreen() {
             <View style={styles.heroBubbleOne} />
             <View style={styles.heroBubbleTwo} />
             <Text style={styles.heroEyebrow}>New account</Text>
-            <Text style={styles.heroTitle}>Let’s get you started</Text>
+            <Text style={styles.heroTitle}>Let&apos;s get you started</Text>
             <Text style={styles.heroText}>
-              Ekta quick signup, তারপর nearby restaurants, deals, আর cart সব ready.
+              Quick signup করো, তারপর nearby restaurants, deals, আর cart সব ready.
             </Text>
           </View>
 
@@ -158,10 +159,13 @@ export default function SignupScreen() {
             </InputShell>
 
             <Pressable
-              style={[styles.primaryButton, !canSubmit && styles.buttonDisabled]}
+              style={[styles.primaryButton, (!canSubmit || isLoading) && styles.buttonDisabled]}
               onPress={handleSignup}
+              disabled={!canSubmit || isLoading}
             >
-              <Text style={styles.primaryButtonText}>Create account</Text>
+              <Text style={styles.primaryButtonText}>
+                {isLoading ? "Creating account..." : "Create account"}
+              </Text>
               <Ionicons name="sparkles-outline" size={18} color="#FFFFFF" />
             </Pressable>
           </View>

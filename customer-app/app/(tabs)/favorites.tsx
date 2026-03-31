@@ -7,7 +7,10 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { FavoriteButton } from "@/components/favorite-button";
+import { RestaurantCardListSkeleton } from "@/components/restaurant-skeletons";
+import { useAuthStore } from "@/lib/auth-store";
 import { dummyRestaurants } from "@/lib/customer-data";
+import { useFavoritesQuery } from "@/lib/favorite-queries";
 import { useFavoriteStore } from "@/lib/favorite-store";
 import { useDeliveryLocation } from "@/lib/location-store";
 import {
@@ -18,18 +21,48 @@ import {
 
 export default function FavoritesScreen() {
   const router = useRouter();
+  const user = useAuthStore((state) => state.user);
   const deliveryLocation = useDeliveryLocation();
-  const favoriteIds = useFavoriteStore((state) => state.favoriteIds);
+  const guestFavoriteIds = useFavoriteStore((state) => state.favoriteIds);
+  const { data: favoritesData, isLoading } = useFavoritesQuery(Boolean(user?.id));
 
   const favoriteRestaurants = useMemo(() => {
-    const ids = new Set(favoriteIds);
+    if (!user) {
+      const ids = new Set(guestFavoriteIds);
+      return sortRestaurantsByDistance({
+        restaurants: dummyRestaurants.filter((restaurant) =>
+          ids.has(restaurant.id),
+        ),
+        latitude: deliveryLocation.latitude,
+        longitude: deliveryLocation.longitude,
+      });
+    }
 
-    return sortRestaurantsByDistance({
-      restaurants: dummyRestaurants.filter((restaurant) => ids.has(restaurant.id)),
-      latitude: deliveryLocation.latitude,
-      longitude: deliveryLocation.longitude,
+    const restaurants = favoritesData?.restaurants ?? [];
+
+    return [...restaurants].sort((a, b) => {
+      const aDistance = getRestaurantDistanceKm({
+        restaurant: a,
+        latitude: deliveryLocation.latitude,
+        longitude: deliveryLocation.longitude,
+      });
+      const bDistance = getRestaurantDistanceKm({
+        restaurant: b,
+        latitude: deliveryLocation.latitude,
+        longitude: deliveryLocation.longitude,
+      });
+
+      return aDistance - bDistance;
     });
-  }, [deliveryLocation.latitude, deliveryLocation.longitude, favoriteIds]);
+  }, [
+    deliveryLocation.latitude,
+    deliveryLocation.longitude,
+    favoritesData?.restaurants,
+    guestFavoriteIds,
+    user,
+  ]);
+
+  const savedCount = user ? favoriteRestaurants.length : guestFavoriteIds.length;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
@@ -48,13 +81,34 @@ export default function FavoritesScreen() {
           </Text>
           <View style={styles.heroPill}>
             <Ionicons name="heart" size={14} color="#FF5D8F" />
-            <Text style={styles.heroPillText}>
-              {favoriteRestaurants.length} saved
-            </Text>
+            <Text style={styles.heroPillText}>{savedCount} saved</Text>
           </View>
         </View>
 
-        {favoriteRestaurants.length === 0 ? (
+        {!user && guestFavoriteIds.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <View style={styles.emptyIcon}>
+              <Ionicons name="person-circle-outline" size={28} color="#24314A" />
+            </View>
+            <Text style={styles.emptyTitle}>Login to sync favourites</Text>
+            <Text style={styles.emptyText}>
+              Hearted restaurants will stay safely in your account after login.
+            </Text>
+            <Pressable
+              style={styles.emptyButton}
+              onPress={() =>
+                router.push({
+                  pathname: "/login",
+                  params: { redirectTo: "/(tabs)/favorites" },
+                })
+              }
+            >
+              <Text style={styles.emptyButtonText}>Login</Text>
+            </Pressable>
+          </View>
+        ) : user && isLoading ? (
+          <RestaurantCardListSkeleton count={3} />
+        ) : favoriteRestaurants.length === 0 ? (
           <View style={styles.emptyCard}>
             <View style={styles.emptyIcon}>
               <Ionicons name="heart-outline" size={28} color="#24314A" />
@@ -65,13 +119,34 @@ export default function FavoritesScreen() {
             </Text>
             <Pressable
               style={styles.emptyButton}
-              onPress={() => router.push("/(tabs)/discover")}
+              onPress={() =>
+                user
+                  ? router.push("/(tabs)/discover")
+                  : router.push({
+                      pathname: "/login",
+                      params: { redirectTo: "/(tabs)/favorites" },
+                    })
+              }
             >
-              <Text style={styles.emptyButtonText}>Browse restaurants</Text>
+              <Text style={styles.emptyButtonText}>
+                {user ? "Browse restaurants" : "Login"}
+              </Text>
             </Pressable>
           </View>
         ) : (
           <View style={styles.list}>
+            {!user ? (
+              <View style={styles.syncNote}>
+                <Ionicons
+                  name="information-circle-outline"
+                  size={16}
+                  color="#24314A"
+                />
+                <Text style={styles.syncNoteText}>
+                  Login korle favourites account-er sathe sync thakbe.
+                </Text>
+              </View>
+            ) : null}
             {favoriteRestaurants.map((restaurant) => (
               <View key={restaurant.id} style={styles.restaurantCard}>
                 <Pressable
@@ -211,6 +286,21 @@ const styles = StyleSheet.create({
   },
   list: {
     gap: 14,
+  },
+  syncNote: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 20,
+    backgroundColor: "#FFF7F2",
+  },
+  syncNoteText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#6F6A77",
   },
   restaurantCard: {
     position: "relative",
