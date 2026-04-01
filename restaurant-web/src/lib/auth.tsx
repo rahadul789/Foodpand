@@ -46,9 +46,9 @@ async function getMe(token: string) {
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {
-  const [token, setToken] = useState<string | null>(null);
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem(STORAGE_KEY));
   const [user, setUser] = useState<OwnerUser | null>(null);
-  const [isHydrating, setIsHydrating] = useState(true);
+  const [isHydrating, setIsHydrating] = useState(() => Boolean(localStorage.getItem(STORAGE_KEY)));
 
   const logout = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
@@ -103,6 +103,24 @@ export function AuthProvider({ children }: PropsWithChildren) {
       cancelled = true;
     };
   }, [logout, refreshMe]);
+
+  useEffect(() => {
+    const handleStorage = () => {
+      const nextToken = localStorage.getItem(STORAGE_KEY);
+
+      if (!nextToken) {
+        setToken(null);
+        setUser(null);
+        return;
+      }
+
+      setToken(nextToken);
+      void refreshMe();
+    };
+
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [refreshMe]);
 
   const login = useCallback(async (payload: { email: string; password: string }) => {
     const response = await apiPost<AuthResponse>("/api/v1/auth/login", payload);

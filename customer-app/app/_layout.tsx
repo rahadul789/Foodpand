@@ -126,10 +126,25 @@ function LocationSyncGate() {
   return null;
 }
 
+function AuthBootstrap() {
+  const restoreSession = useAuthStore((state) => state.restoreSession);
+
+  useEffect(() => {
+    void restoreSession();
+  }, [restoreSession]);
+
+  return null;
+}
+
 export default function RootLayout() {
+  const hasHydrated = useAuthStore((state) => state.hasHydrated);
+
   return (
     <QueryClientProvider client={queryClient}>
       <StatusBar style="auto" />
+      <AuthBootstrap />
+      {!hasHydrated ? null : (
+        <>
       <Stack
         screenOptions={{
           headerShown: false,
@@ -140,6 +155,8 @@ export default function RootLayout() {
       <GuideBuddyOverlay />
       <GlobalCartSwitchModal />
       <GlobalToast />
+        </>
+      )}
     </QueryClientProvider>
   );
 }

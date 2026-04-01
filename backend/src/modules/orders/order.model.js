@@ -107,6 +107,60 @@ const appliedOfferSchema = new Schema(
   },
 );
 
+const orderLiveLocationSchema = new Schema(
+  {
+    latitude: {
+      type: Number,
+      required: true,
+    },
+    longitude: {
+      type: Number,
+      required: true,
+    },
+    heading: {
+      type: Number,
+      default: null,
+    },
+    speed: {
+      type: Number,
+      default: null,
+    },
+    updatedAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
+const orderDeliveryLocationSchema = new Schema(
+  {
+    label: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    subtitle: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    latitude: {
+      type: Number,
+      required: true,
+    },
+    longitude: {
+      type: Number,
+      required: true,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
 const orderSchema = new Schema(
   {
     orderCode: {
@@ -222,6 +276,10 @@ const orderSchema = new Schema(
       required: true,
       trim: true,
     },
+    deliveryLocation: {
+      type: orderDeliveryLocationSchema,
+      default: null,
+    },
     note: {
       type: String,
       default: "",
@@ -241,6 +299,15 @@ const orderSchema = new Schema(
       type: String,
       default: "",
       trim: true,
+    },
+    deliveryTransportMode: {
+      type: String,
+      enum: ["bicycle", "motorbike", "car"],
+      default: "bicycle",
+    },
+    deliveryLiveLocation: {
+      type: orderLiveLocationSchema,
+      default: null,
     },
     prepareMinMinutes: {
       type: Number,
@@ -287,6 +354,14 @@ const orderSchema = new Schema(
     timestamps: true,
   },
 );
+
+orderSchema.pre("validate", function ensureOrderCode(next) {
+  if (!this.orderCode) {
+    this.orderCode = `FD-${String(this._id).slice(-8).toUpperCase()}`;
+  }
+
+  next();
+});
 
 orderSchema.index({ userId: 1, createdAt: -1 });
 orderSchema.index({ userId: 1, status: 1, createdAt: -1 });

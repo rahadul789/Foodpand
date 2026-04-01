@@ -34,6 +34,7 @@ import {
   getDisplayOrderCode,
   getDynamicPrepareRange,
 } from "@/lib/order-timing";
+import { getLiveRouteMetrics } from "@/lib/route-metrics";
 import { useUIStore } from "@/lib/ui-store";
 
 function formatDateTime(value: string) {
@@ -164,6 +165,17 @@ export default function OrderDetailsScreen() {
     data: restaurant,
     isLoading: restaurantLoading,
   } = useRestaurantDetailQuery(order?.restaurantId);
+  const liveRouteMetrics = useMemo(
+    () =>
+      order
+        ? getLiveRouteMetrics({
+            riderLocation: order.deliveryLiveLocation ?? null,
+            destination: order.deliveryLocation ?? null,
+            speedMps: order.deliveryLiveLocation?.speed ?? null,
+          })
+        : null,
+    [order],
+  );
 
   useEffect(() => {
     if (order?.status !== "Preparing") {
@@ -310,7 +322,11 @@ export default function OrderDetailsScreen() {
             <Text style={styles.heroMeta}>
               {getDisplayOrderCode(order)} | {formatDateTime(order.placedAt)}
             </Text>
-            <Text style={styles.heroSubMeta}>{order.eta}</Text>
+            <Text style={styles.heroSubMeta}>
+              {order.status === "On the way" && liveRouteMetrics
+                ? `${liveRouteMetrics.distanceLabel} | ${liveRouteMetrics.etaLabel}`
+                : order.eta}
+            </Text>
           </View>
         </View>
 

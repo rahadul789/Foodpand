@@ -22,6 +22,7 @@ function sanitizeUser(user) {
     email: user.email,
     phone: user.phone,
     role: user.role,
+    deliveryTransportMode: user.deliveryTransportMode || undefined,
     location:
       locationParts.join(", ") || "Set your delivery location",
     loyaltyPoints: user.loyaltyPoints,

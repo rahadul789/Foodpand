@@ -12,6 +12,7 @@ import {
   Vibration,
   View,
 } from "react-native";
+import MapView, { Marker, Polyline } from "react-native-maps";
 
 import {
   AppScreen,
@@ -24,6 +25,7 @@ import {
 import { useAuthStore } from "@/lib/auth-store";
 import { getResolvedOrder } from "@/lib/order-store";
 import { useCustomerOrderRealtime } from "@/lib/order-realtime";
+import { getLiveRouteMetrics } from "@/lib/route-metrics";
 import { formatTimeLabel, getDisplayOrderCode, getDynamicPrepareRange } from "@/lib/order-timing";
 import {
   useActiveOrdersQuery,
@@ -119,6 +121,63 @@ function OrderSuccessConfetti({ visible }: { visible: boolean }) {
   );
 }
 
+function RiderMapMarker({
+  label,
+  heading = 0,
+}: {
+  label: string;
+  heading?: number;
+}) {
+  return (
+    <View style={styles.mapMarkerWrap}>
+      <View style={styles.riderMarkerBubble}>
+        <View
+          style={{
+            transform: [{ rotate: `${heading}deg` }],
+          }}
+        >
+          <Ionicons name="navigate" size={18} color="#FFFFFF" />
+        </View>
+      </View>
+      <View style={styles.riderMarkerLabel}>
+        <Text style={styles.riderMarkerLabelText} numberOfLines={1}>
+          {label}
+        </Text>
+      </View>
+      <View style={styles.mapMarkerPointer} />
+    </View>
+  );
+}
+
+function DestinationMapMarker({
+  pulse,
+}: {
+  pulse: Animated.Value;
+}) {
+  return (
+    <View style={styles.mapMarkerWrap}>
+      <Animated.View
+        style={[
+          styles.destinationGlow,
+          {
+            transform: [{ scale: pulse }],
+            opacity: pulse.interpolate({
+              inputRange: [1, 1.45],
+              outputRange: [0.26, 0],
+            }),
+          },
+        ]}
+      />
+      <View style={styles.destinationMarkerOuter}>
+        <View style={styles.destinationMarkerInner}>
+          <Ionicons name="home-outline" size={14} color="#FF5D8F" />
+        </View>
+      </View>
+      <View style={styles.mapMarkerPointerSoft} />
+    </View>
+  );
+}
+
 export default function TrackingScreen() {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
@@ -137,6 +196,7 @@ export default function TrackingScreen() {
   const [allowLeave, setAllowLeave] = useState(false);
   const [progressNow, setProgressNow] = useState(() => Date.now());
   const prepProgressAnimation = useRef(new Animated.Value(0)).current;
+  const destinationPulse = useRef(new Animated.Value(1)).current;
 
   useCustomerOrderRealtime(Boolean(user?.id));
 
@@ -164,6 +224,59 @@ export default function TrackingScreen() {
 
     return "Payment confirmed";
   }, [params.payment]);
+  const liveRouteMetrics = useMemo(
+    () =>
+      getLiveRouteMetrics({
+        riderLocation: order?.deliveryLiveLocation ?? null,
+        destination: order?.deliveryLocation ?? null,
+        speedMps: order?.deliveryLiveLocation?.speed ?? null,
+        transportMode: order?.deliveryTransportMode ?? "bicycle",
+      }),
+    [order],
+  );
+  const mapRegion = useMemo(() => {
+    if (order?.deliveryLiveLocation && order?.deliveryLocation) {
+      const centerLatitude =
+        (order.deliveryLiveLocation.latitude + order.deliveryLocation.latitude) / 2;
+      const centerLongitude =
+        (order.deliveryLiveLocation.longitude + order.deliveryLocation.longitude) / 2;
+      const latitudeDelta = Math.max(
+        0.004,
+        Math.abs(order.deliveryLiveLocation.latitude - order.deliveryLocation.latitude) * 1.35,
+      );
+      const longitudeDelta = Math.max(
+        0.004,
+        Math.abs(order.deliveryLiveLocation.longitude - order.deliveryLocation.longitude) * 1.35,
+      );
+
+      return {
+        latitude: centerLatitude,
+        longitude: centerLongitude,
+        latitudeDelta,
+        longitudeDelta,
+      };
+    }
+
+    if (order?.deliveryLiveLocation) {
+      return {
+        latitude: order.deliveryLiveLocation.latitude,
+        longitude: order.deliveryLiveLocation.longitude,
+        latitudeDelta: 0.005,
+        longitudeDelta: 0.005,
+      };
+    }
+
+    if (order?.deliveryLocation) {
+      return {
+        latitude: order.deliveryLocation.latitude,
+        longitude: order.deliveryLocation.longitude,
+        latitudeDelta: 0.005,
+        longitudeDelta: 0.005,
+      };
+    }
+
+    return null;
+  }, [order]);
 
   const prepProgress = useMemo(() => {
     if (!order || order.status !== "Preparing" || !order.restaurantAcceptedAt || !order.estimatedReadyAt) {
@@ -243,6 +356,32 @@ export default function TrackingScreen() {
     };
   }, [prepProgress, prepProgressAnimation]);
 
+  useEffect(() => {
+    if (order?.status !== "On the way") {
+      destinationPulse.setValue(1);
+      return undefined;
+    }
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(destinationPulse, {
+          toValue: 1.45,
+          duration: 1300,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(destinationPulse, {
+          toValue: 1,
+          duration: 0,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+
+    loop.start();
+    return () => loop.stop();
+  }, [destinationPulse, order?.status]);
+
   if ((activeLoading || historyLoading || detailLoading) && !order) {
     return (
       <AppScreen scroll={false} contentContainerStyle={styles.container}>
@@ -308,8 +447,9 @@ export default function TrackingScreen() {
           ? `${order.riderName} accepted your order and will pick it up shortly from ${order.restaurantName}.`
           : `${order.restaurantName} has finished preparing your order. A delivery partner will accept it soon.`
         : isDelivered
-        ? `${order.items.join(", ")} was delivered successfully.`
-        : `Your courier is on the way with ${order.items.join(", ")}.`;
+      ? `${order.items.join(", ")} was delivered successfully.`
+      : `Your courier is on the way with ${order.items.join(", ")}.`;
+  const liveEtaLabel = isOnTheWay && liveRouteMetrics ? liveRouteMetrics.etaLabel : order.eta;
   const prepHeadline = prepProgress?.delayed
     ? "Kitchen is taking a little longer than expected"
     : prepProgress?.remainingMinutes
@@ -359,26 +499,97 @@ export default function TrackingScreen() {
       ) : null}
 
       <View style={styles.mapCard}>
-        <View style={styles.mapPattern}>
-          <View style={styles.routeLine} />
-          <View style={[styles.pin, styles.pinStart]} />
-          <View style={[styles.pin, styles.pinEnd]} />
-          <View style={styles.riderBadge}>
-            <FoodArtwork
-              accent={order.accent}
-              icon={stageIcon}
-              size={78}
-            />
-          </View>
-          {isOnTheWay ? (
-            <View style={styles.liveMapHint}>
-              <Ionicons name="navigate-outline" size={14} color="#24314A" />
-              <Text style={styles.liveMapHintText}>
-                Live rider map will appear here when delivery location is connected.
-              </Text>
+        {isOnTheWay && mapRegion ? (
+          <MapView
+            style={styles.map}
+            region={mapRegion}
+            pointerEvents="none"
+            scrollEnabled={false}
+            rotateEnabled={false}
+            pitchEnabled={false}
+            zoomEnabled={false}
+            toolbarEnabled={false}
+          >
+            {order.deliveryLocation ? (
+              <Marker
+                coordinate={{
+                  latitude: order.deliveryLocation.latitude,
+                  longitude: order.deliveryLocation.longitude,
+                }}
+                anchor={{ x: 0.5, y: 0.88 }}
+                tracksViewChanges
+              >
+                <DestinationMapMarker pulse={destinationPulse} />
+              </Marker>
+            ) : null}
+            {order.deliveryLiveLocation ? (
+              <Marker
+                coordinate={{
+                  latitude: order.deliveryLiveLocation.latitude,
+                  longitude: order.deliveryLiveLocation.longitude,
+                }}
+                anchor={{ x: 0.5, y: 0.92 }}
+                tracksViewChanges
+              >
+                <RiderMapMarker
+                  label={order.riderName || "Rider"}
+                  heading={order.deliveryLiveLocation.heading ?? 0}
+                />
+              </Marker>
+            ) : null}
+            {order.deliveryLocation && order.deliveryLiveLocation ? (
+              <Polyline
+                coordinates={[
+                  {
+                    latitude: order.deliveryLiveLocation.latitude,
+                    longitude: order.deliveryLiveLocation.longitude,
+                  },
+                  {
+                    latitude: order.deliveryLocation.latitude,
+                    longitude: order.deliveryLocation.longitude,
+                  },
+                ]}
+                strokeColor={theme.colors.primary}
+                strokeWidth={5}
+                lineDashPattern={[8, 8]}
+              />
+            ) : null}
+          </MapView>
+        ) : (
+          <View style={styles.mapPattern}>
+            <View style={styles.routeLine} />
+            <View style={[styles.pin, styles.pinStart]} />
+            <View style={[styles.pin, styles.pinEnd]} />
+            <View style={styles.riderBadge}>
+              <FoodArtwork
+                accent={order.accent}
+                icon={stageIcon}
+                size={78}
+              />
             </View>
-          ) : null}
-        </View>
+          </View>
+        )}
+        {false ? (
+          <View style={styles.liveMapHint}>
+            <Ionicons name="navigate-outline" size={14} color="#24314A" />
+            <Text style={styles.liveMapHintText}>
+              {liveRouteMetrics
+                ? `${liveRouteMetrics!.distanceLabel} left • ${liveRouteMetrics!.etaLabel}`
+                : "Connecting live rider route..."}
+            </Text>
+          </View>
+        ) : null}
+        {false ? (
+          <View style={styles.mapFloatingCard}>
+            <View style={styles.mapFloatingIcon}>
+              <Ionicons name="time-outline" size={16} color="#24314A" />
+            </View>
+            <View style={styles.mapFloatingCopy}>
+              <Text style={styles.mapFloatingTitle}>{liveRouteMetrics!.etaLabel}</Text>
+              <Text style={styles.mapFloatingText}>{liveRouteMetrics!.distanceLabel} to your door</Text>
+            </View>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.bottomSheet}>
@@ -391,9 +602,47 @@ export default function TrackingScreen() {
             textColor="#24314A"
           />
         </View>
-        <MetricText>{order.eta}</MetricText>
+        <MetricText>{liveEtaLabel}</MetricText>
         <Text style={styles.orderCodeText}>{getDisplayOrderCode(order)}</Text>
         <Text style={styles.orderText}>{stageMessage}</Text>
+
+        {isOnTheWay ? (
+          <View style={styles.liveRouteCard}>
+            <View style={styles.liveRouteTop}>
+              <View style={styles.liveRouteBadge}>
+                <Ionicons name="bicycle-outline" size={18} color="#24314A" />
+              </View>
+              <View style={styles.liveRouteCopy}>
+                <Text style={styles.liveRouteTitle}>
+                  {liveRouteMetrics?.etaLabel ?? "Live rider route active"}
+                </Text>
+                <Text style={styles.liveRouteText}>
+                  {order.riderName || "Your rider"} is heading to your delivery location by{" "}
+                  {order.deliveryTransportMode === "motorbike"
+                    ? "motorbike"
+                    : order.deliveryTransportMode === "car"
+                      ? "car"
+                      : "bicycle"}
+                  .
+                </Text>
+              </View>
+            </View>
+            <View style={styles.liveRouteStatsRow}>
+              <View style={styles.liveRouteStatChip}>
+                <Text style={styles.liveRouteStatLabel}>Distance</Text>
+                <Text style={styles.liveRouteStatValue}>
+                  {liveRouteMetrics?.distanceLabel ?? "Connecting..."}
+                </Text>
+              </View>
+              <View style={styles.liveRouteStatChip}>
+                <Text style={styles.liveRouteStatLabel}>Arrival</Text>
+                <Text style={styles.liveRouteStatValue}>
+                  {liveRouteMetrics?.etaLabel ?? "Updating..."}
+                </Text>
+              </View>
+            </View>
+          </View>
+        ) : null}
 
         {prepProgress ? (
           <View style={styles.prepCard}>
@@ -560,6 +809,9 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     position: "relative",
   },
+  map: {
+    flex: 1,
+  },
   mapPattern: {
     flex: 1,
     backgroundColor: "#F0E2D3",
@@ -615,6 +867,109 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#24314A",
   },
+  mapFloatingCard: {
+    position: "absolute",
+    top: 16,
+    left: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.92)",
+  },
+  mapFloatingIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFF1CC",
+  },
+  mapFloatingCopy: {
+    gap: 2,
+  },
+  mapFloatingTitle: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: "#20263A",
+  },
+  mapFloatingText: {
+    fontSize: 11,
+    color: "#6F6A77",
+  },
+  destinationGlow: {
+    position: "absolute",
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "#FFB8CB",
+  },
+  mapMarkerWrap: {
+    alignItems: "center",
+  },
+  riderMarkerBubble: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#24314A",
+    borderWidth: 3,
+    borderColor: "#FFFFFF",
+  },
+  riderMarkerLabel: {
+    marginTop: 6,
+    maxWidth: 88,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "#24314A",
+  },
+  riderMarkerLabelText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#FFFFFF",
+    textAlign: "center",
+  },
+  destinationMarkerOuter: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
+    borderWidth: 2,
+    borderColor: "#FFD4E0",
+  },
+  destinationMarkerInner: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFF0F5",
+  },
+  mapMarkerPointer: {
+    marginTop: -2,
+    width: 10,
+    height: 10,
+    borderRadius: 4,
+    transform: [{ rotate: "45deg" }],
+    backgroundColor: "#24314A",
+  },
+  mapMarkerPointerSoft: {
+    marginTop: -4,
+    width: 10,
+    height: 10,
+    borderRadius: 4,
+    transform: [{ rotate: "45deg" }],
+    backgroundColor: "#FFFFFF",
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: "#FFD4E0",
+  },
   bottomSheet: {
     borderRadius: theme.radius.xl,
     backgroundColor: theme.colors.surface,
@@ -639,6 +994,65 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#8A7E75",
     marginTop: -6,
+  },
+  liveRouteCard: {
+    gap: 12,
+    padding: 14,
+    borderRadius: theme.radius.lg,
+    backgroundColor: "#EEF3FF",
+    borderWidth: 1,
+    borderColor: "#D8E2FF",
+  },
+  liveRouteTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  liveRouteBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
+  },
+  liveRouteCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  liveRouteTitle: {
+    fontSize: 15,
+    fontWeight: "900",
+    color: "#24314A",
+  },
+  liveRouteText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: theme.colors.muted,
+  },
+  liveRouteStatsRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  liveRouteStatChip: {
+    flex: 1,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "#FFFFFF",
+    gap: 2,
+  },
+  liveRouteStatLabel: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#7182A2",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  liveRouteStatValue: {
+    fontSize: 14,
+    fontWeight: "900",
+    color: "#24314A",
   },
   prepCard: {
     gap: 12,
@@ -730,3 +1144,4 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
   },
 });
+

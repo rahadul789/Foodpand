@@ -13,6 +13,7 @@ const {
   listAvailableDeliveryOrdersController,
   listOrderHistoryController,
   listRestaurantOwnerOrdersController,
+  updateDeliveryLiveLocationController,
   updatePreparationWindowController,
   updateOrderStatusController,
 } = require("./order.controller");
@@ -47,6 +48,11 @@ orderRoutes.patch(
   "/:orderId/assign-delivery",
   requireRole("delivery_partner"),
   assignDeliveryPartnerController,
+);
+orderRoutes.patch(
+  "/:orderId/location",
+  requireRole("delivery_partner"),
+  updateDeliveryLiveLocationController,
 );
 orderRoutes.patch(
   "/:orderId/preparation-window",
