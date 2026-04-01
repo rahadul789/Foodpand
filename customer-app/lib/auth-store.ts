@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import * as SecureStore from "expo-secure-store";
 
 import {
   type AuthPayload,
@@ -8,6 +9,8 @@ import {
   signupRequest,
 } from "@/lib/auth-api";
 import { setApiAccessToken } from "@/lib/api-client";
+
+const AUTH_TOKEN_KEY = "customer-app-auth-token";
 
 export type AuthUser = {
   id: string;
@@ -28,8 +31,11 @@ type AuthStore = {
   accessToken: string | null;
   user: AuthUser | null;
   isLoading: boolean;
+  isHydrating: boolean;
+  hasHydrated: boolean;
   signIn: (payload: AuthPayload) => Promise<AuthResult>;
   signUp: (payload: SignupPayload) => Promise<AuthResult>;
+  restoreSession: () => Promise<void>;
   hydrateMe: () => Promise<void>;
   setProfileLocation: (location: string) => void;
   signOut: () => void;
@@ -39,11 +45,14 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   accessToken: null,
   user: null,
   isLoading: false,
+  isHydrating: false,
+  hasHydrated: false,
   signIn: async (payload) => {
     set({ isLoading: true });
 
     try {
       const data = await loginRequest(payload);
+      await SecureStore.setItemAsync(AUTH_TOKEN_KEY, data.accessToken);
       setApiAccessToken(data.accessToken);
       set({
         accessToken: data.accessToken,
@@ -69,6 +78,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
     try {
       const data = await signupRequest(payload);
+      await SecureStore.setItemAsync(AUTH_TOKEN_KEY, data.accessToken);
       setApiAccessToken(data.accessToken);
       set({
         accessToken: data.accessToken,
@@ -89,6 +99,50 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
             ? error.message
             : "Signup failed. Try again.",
       };
+    }
+  },
+  restoreSession: async () => {
+    if (get().hasHydrated || get().isHydrating) {
+      return;
+    }
+
+    set({ isHydrating: true });
+
+    try {
+      const storedToken = await SecureStore.getItemAsync(AUTH_TOKEN_KEY);
+
+      if (!storedToken) {
+        setApiAccessToken(null);
+        set({
+          accessToken: null,
+          user: null,
+          isHydrating: false,
+          hasHydrated: true,
+        });
+        return;
+      }
+
+      setApiAccessToken(storedToken);
+      set({
+        accessToken: storedToken,
+      });
+
+      const user = await getMeRequest(storedToken);
+      set({
+        accessToken: storedToken,
+        user,
+        isHydrating: false,
+        hasHydrated: true,
+      });
+    } catch (_error) {
+      await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
+      setApiAccessToken(null);
+      set({
+        accessToken: null,
+        user: null,
+        isHydrating: false,
+        hasHydrated: true,
+      });
     }
   },
   hydrateMe: async () => {
@@ -123,6 +177,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       };
     }),
   signOut: () => {
+    void SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
     setApiAccessToken(null);
     set({
       accessToken: null,

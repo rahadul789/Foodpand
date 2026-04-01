@@ -51,6 +51,34 @@ const userLocationSchema = new Schema(
   },
 );
 
+const riderLiveLocationSchema = new Schema(
+  {
+    latitude: {
+      type: Number,
+      default: null,
+    },
+    longitude: {
+      type: Number,
+      default: null,
+    },
+    heading: {
+      type: Number,
+      default: null,
+    },
+    speed: {
+      type: Number,
+      default: null,
+    },
+    updatedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
 const userSchema = new Schema(
   {
     name: {
@@ -89,6 +117,15 @@ const userSchema = new Schema(
     },
     selectedDeliveryLocation: {
       type: userLocationSchema,
+      default: null,
+    },
+    deliveryTransportMode: {
+      type: String,
+      enum: ["bicycle", "motorbike", "car"],
+      default: "bicycle",
+    },
+    liveDeliveryLocation: {
+      type: riderLiveLocationSchema,
       default: null,
     },
     isActive: {

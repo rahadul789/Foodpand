@@ -2,6 +2,7 @@ const { Types } = require("mongoose");
 
 const { AppError } = require("../../common/utils/app-error");
 const { Restaurant } = require("../restaurants/restaurant.model");
+const { User } = require("../users/user.model");
 const { Order } = require("./order.model");
 const { buildPricingBreakdown } = require("./order-pricing.service");
 const {
@@ -71,7 +72,7 @@ function formatPrepRange(minMinutes, maxMinutes) {
 
 function buildPreparingEta(minMinutes, maxMinutes) {
   const rangeLabel = formatPrepRange(minMinutes, maxMinutes);
-  return `Preparing · ${rangeLabel}`;
+  return `Preparing - ${rangeLabel}`;
 }
 
 function normalizePreparationWindow(payload, restaurant) {
@@ -106,6 +107,65 @@ function normalizePreparationWindow(payload, restaurant) {
   return {
     minMinutes: Math.round(minMinutes),
     maxMinutes: Math.round(maxMinutes),
+  };
+}
+
+function normalizeLiveLocation(payload) {
+  const latitude = Number(payload.latitude);
+  const longitude = Number(payload.longitude);
+  const heading =
+    payload.heading !== undefined && payload.heading !== null
+      ? Number(payload.heading)
+      : null;
+  const speed =
+    payload.speed !== undefined && payload.speed !== null
+      ? Number(payload.speed)
+      : null;
+
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+    throw new AppError("Latitude is invalid", 400);
+  }
+
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    throw new AppError("Longitude is invalid", 400);
+  }
+
+  if (heading !== null && (!Number.isFinite(heading) || heading < 0 || heading > 360)) {
+    throw new AppError("Heading is invalid", 400);
+  }
+
+  if (speed !== null && (!Number.isFinite(speed) || speed < 0)) {
+    throw new AppError("Speed is invalid", 400);
+  }
+
+  return {
+    latitude,
+    longitude,
+    heading,
+    speed,
+    updatedAt: new Date(),
+  };
+}
+
+function normalizeDeliveryLocation(payload) {
+  const latitude = Number(payload?.latitude);
+  const longitude = Number(payload?.longitude);
+  const label = payload?.label?.trim() || "";
+  const subtitle = payload?.subtitle?.trim() || "";
+
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+    throw new AppError("Delivery latitude is invalid", 400);
+  }
+
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    throw new AppError("Delivery longitude is invalid", 400);
+  }
+
+  return {
+    latitude,
+    longitude,
+    label,
+    subtitle,
   };
 }
 
@@ -200,12 +260,36 @@ function mapOrder(order) {
     paymentMethod: order.paymentMethod,
     placedAt: order.placedAt.toISOString(),
     deliveryAddress: order.deliveryAddress,
+    deliveryLocation: order.deliveryLocation
+      ? {
+          label: order.deliveryLocation.label || "",
+          subtitle: order.deliveryLocation.subtitle || "",
+          latitude: order.deliveryLocation.latitude,
+          longitude: order.deliveryLocation.longitude,
+        }
+      : undefined,
     note: order.note || undefined,
     canTrack: order.canTrack,
     deliveryPartnerId: order.deliveryPartnerId
       ? String(order.deliveryPartnerId)
       : undefined,
     riderName: order.riderName || undefined,
+    deliveryTransportMode: order.deliveryTransportMode || undefined,
+    deliveryLiveLocation: order.deliveryLiveLocation
+      ? {
+          latitude: order.deliveryLiveLocation.latitude,
+          longitude: order.deliveryLiveLocation.longitude,
+          heading:
+            typeof order.deliveryLiveLocation.heading === "number"
+              ? order.deliveryLiveLocation.heading
+              : undefined,
+          speed:
+            typeof order.deliveryLiveLocation.speed === "number"
+              ? order.deliveryLiveLocation.speed
+              : undefined,
+          updatedAt: order.deliveryLiveLocation.updatedAt?.toISOString(),
+        }
+      : undefined,
     prepareMinMinutes:
       typeof order.prepareMinMinutes === "number" ? order.prepareMinMinutes : undefined,
     prepareMaxMinutes:
@@ -308,6 +392,7 @@ async function createOrder(userId, payload) {
   const lineItems = normalizeLineItems(payload.items, restaurant);
   const paymentMethod = payload.paymentMethod === "bkash" ? "bKash" : "COD";
   const deliveryAddress = payload.deliveryAddress?.trim();
+  const deliveryLocation = normalizeDeliveryLocation(payload.deliveryLocation);
 
   if (!deliveryAddress) {
     throw new AppError("Delivery address is required", 400);
@@ -348,6 +433,7 @@ async function createOrder(userId, payload) {
     lineItems,
     paymentMethod,
     deliveryAddress,
+    deliveryLocation,
     note: payload.note?.trim() || "",
     canTrack: false,
     riderName: "",
@@ -531,6 +617,7 @@ async function assignDeliveryPartner(actorUser, orderId) {
   order.deliveryPartnerId = actorUser._id;
   order.deliveryAcceptedAt = order.deliveryAcceptedAt ?? new Date();
   order.riderName = actorUser.name?.trim() || "Delivery partner";
+  order.deliveryTransportMode = actorUser.deliveryTransportMode || "bicycle";
   order.statusHistory.push({
     status: order.status,
     actorRole: "delivery_partner",
@@ -615,6 +702,26 @@ async function updateOrderStatus(actorUser, orderId, payload) {
     order.riderName = presentation.riderName;
   }
 
+  if (actorRole === "delivery_partner") {
+    order.deliveryTransportMode =
+      actorUser.deliveryTransportMode || order.deliveryTransportMode || "bicycle";
+  }
+
+  if (status === "On the way") {
+    const anotherLiveOrder = await Order.exists({
+      deliveryPartnerId: actorUser._id,
+      status: "On the way",
+      _id: { $ne: order._id },
+    });
+
+    if (anotherLiveOrder) {
+      throw new AppError(
+        "Finish or deliver the current live order before starting another route",
+        409,
+      );
+    }
+  }
+
   if (status === "Preparing") {
     const acceptedAt = order.restaurantAcceptedAt ?? new Date();
     order.restaurantAcceptedAt = acceptedAt;
@@ -634,6 +741,11 @@ async function updateOrderStatus(actorUser, orderId, payload) {
 
   if (status === "Delivered") {
     order.deliveredAt = new Date();
+    order.deliveryLiveLocation = null;
+  }
+
+  if (status === "Cancelled") {
+    order.deliveryLiveLocation = null;
   }
 
   order.statusHistory.push({
@@ -737,6 +849,75 @@ async function updatePreparationWindow(actorUser, orderId, payload) {
   return mappedOrder;
 }
 
+async function updateDeliveryLiveLocation(actorUser, orderId, payload) {
+  validateObjectId(orderId, "Order not found");
+
+  if (actorUser.role !== "delivery_partner") {
+    throw new AppError("You can not update live location for this order", 403);
+  }
+
+  const order = await Order.findById(orderId);
+  if (!order) {
+    throw new AppError("Order not found", 404);
+  }
+
+  assertDeliveryPartnerCanAccessOrder(String(actorUser._id), order);
+
+  if (order.status !== "On the way") {
+    throw new AppError("Live location can only be shared while the order is on the way", 400);
+  }
+
+  const anotherLiveOrder = await Order.exists({
+    deliveryPartnerId: actorUser._id,
+    status: "On the way",
+    _id: { $ne: order._id },
+  });
+
+  if (anotherLiveOrder) {
+    throw new AppError(
+      "Only one picked-up order can share live location at a time",
+      409,
+    );
+  }
+
+  order.deliveryLiveLocation = normalizeLiveLocation(payload);
+  await order.save();
+  await User.updateOne(
+    { _id: actorUser._id },
+    {
+      $set: {
+        liveDeliveryLocation: {
+          latitude: order.deliveryLiveLocation.latitude,
+          longitude: order.deliveryLiveLocation.longitude,
+          heading: order.deliveryLiveLocation.heading ?? null,
+          speed: order.deliveryLiveLocation.speed ?? null,
+          updatedAt: order.deliveryLiveLocation.updatedAt,
+        },
+      },
+    },
+  );
+  const mappedOrder = mapOrder(order.toObject());
+
+  if (order.restaurantOwnerId) {
+    emitOwnerOrderChanged(String(order.restaurantOwnerId), {
+      type: "location_updated",
+      order: mappedOrder,
+    });
+  }
+
+  emitDeliveryOrdersChanged(String(actorUser._id), {
+    type: "location_updated",
+    order: mappedOrder,
+  });
+
+  emitCustomerOrderChanged(String(order.userId), {
+    type: "location_updated",
+    order: mappedOrder,
+  });
+
+  return mappedOrder;
+}
+
 module.exports = {
   ACTIVE_STATUSES,
   assignDeliveryPartner,
@@ -749,6 +930,7 @@ module.exports = {
   listAvailableDeliveryOrders,
   listOrderHistory,
   listRestaurantOwnerOrders,
+  updateDeliveryLiveLocation,
   updatePreparationWindow,
   updateOrderStatus,
 };

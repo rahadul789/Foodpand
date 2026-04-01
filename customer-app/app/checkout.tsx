@@ -184,6 +184,12 @@ export default function CheckoutScreen() {
         deliveryAddress: [location.label, location.subtitle]
           .filter(Boolean)
           .join(", "),
+        deliveryLocation: {
+          label: location.label,
+          subtitle: location.subtitle,
+          latitude: location.latitude,
+          longitude: location.longitude,
+        },
         note: "Rider will call on arrival.",
         couponCode: appliedCoupon,
       });

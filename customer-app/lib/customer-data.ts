@@ -191,9 +191,23 @@ export type Order = {
   paymentMethod: "COD" | "bKash";
   placedAt: string;
   deliveryAddress: string;
+  deliveryLocation?: {
+    label?: string;
+    subtitle?: string;
+    latitude: number;
+    longitude: number;
+  };
   note?: string;
   canTrack?: boolean;
   riderName?: string;
+  deliveryTransportMode?: "bicycle" | "motorbike" | "car";
+  deliveryLiveLocation?: {
+    latitude: number;
+    longitude: number;
+    heading?: number;
+    speed?: number;
+    updatedAt?: string;
+  };
   prepareMinMinutes?: number;
   prepareMaxMinutes?: number;
   estimatedReadyAt?: string;

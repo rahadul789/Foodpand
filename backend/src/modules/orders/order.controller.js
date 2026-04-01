@@ -11,6 +11,7 @@ const {
   listAvailableDeliveryOrders,
   listOrderHistory,
   listRestaurantOwnerOrders,
+  updateDeliveryLiveLocation,
   updatePreparationWindow,
   updateOrderStatus,
 } = require("./order.service");
@@ -124,6 +125,15 @@ const assignDeliveryPartnerController = asyncHandler(async (req, res) => {
   });
 });
 
+const updateDeliveryLiveLocationController = asyncHandler(async (req, res) => {
+  const data = await updateDeliveryLiveLocation(req.user, req.params.orderId, req.body);
+
+  return sendResponse(res, {
+    message: "Live delivery location updated successfully",
+    data,
+  });
+});
+
 module.exports = {
   assignDeliveryPartnerController,
   cancelOrderController,
@@ -135,6 +145,7 @@ module.exports = {
   listAvailableDeliveryOrdersController,
   listOrderHistoryController,
   listRestaurantOwnerOrdersController,
+  updateDeliveryLiveLocationController,
   updatePreparationWindowController,
   updateOrderStatusController,
 };

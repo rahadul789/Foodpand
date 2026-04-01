@@ -39,9 +39,23 @@ type OrderDto = {
   paymentMethod: Order["paymentMethod"];
   placedAt: string;
   deliveryAddress: string;
+  deliveryLocation?: {
+    label?: string;
+    subtitle?: string;
+    latitude: number;
+    longitude: number;
+  };
   note?: string;
   canTrack?: boolean;
   riderName?: string;
+  deliveryTransportMode?: Order["deliveryTransportMode"];
+  deliveryLiveLocation?: {
+    latitude: number;
+    longitude: number;
+    heading?: number;
+    speed?: number;
+    updatedAt?: string;
+  };
   prepareMinMinutes?: number;
   prepareMaxMinutes?: number;
   estimatedReadyAt?: string;
@@ -73,6 +87,12 @@ export type CreateOrderPayload = {
   totalTk: number;
   paymentMethod: PaymentMethodId;
   deliveryAddress: string;
+  deliveryLocation: {
+    label?: string;
+    subtitle?: string;
+    latitude: number;
+    longitude: number;
+  };
   note?: string;
   couponCode?: string | null;
 };
@@ -100,9 +120,12 @@ function mapOrder(dto: OrderDto): Order {
     paymentMethod: dto.paymentMethod,
     placedAt: dto.placedAt,
     deliveryAddress: dto.deliveryAddress,
+    deliveryLocation: dto.deliveryLocation,
     note: dto.note,
     canTrack: dto.canTrack,
     riderName: dto.riderName,
+    deliveryTransportMode: dto.deliveryTransportMode,
+    deliveryLiveLocation: dto.deliveryLiveLocation,
     prepareMinMinutes: dto.prepareMinMinutes,
     prepareMaxMinutes: dto.prepareMaxMinutes,
     estimatedReadyAt: dto.estimatedReadyAt,
