@@ -12,6 +12,7 @@ import {
   type MenuItemAddonGroup,
   type MenuItemBundleSuggestion,
   type MenuItemOptionGroup,
+  type Restaurant,
   dummyRestaurants,
 } from "@/lib/customer-data";
 import { useAuthStore } from "@/lib/auth-store";
@@ -27,7 +28,43 @@ import { useRestaurantDetailQuery } from "@/lib/restaurant-queries";
 import { formatDistanceKm, getRestaurantDistanceKm } from "@/lib/restaurant-utils";
 import { useUIStore } from "@/lib/ui-store";
 
-const tk = (price: number) => Math.round(price * 10);
+const tk = (price: number) => Math.round(price);
+
+function normalizeLegacyFallbackRestaurant(restaurant: Restaurant): Restaurant {
+  return {
+    ...restaurant,
+    menu: restaurant.menu.map((item) => ({
+      ...item,
+      price: item.price * 10,
+      optionGroups: item.optionGroups?.map((group) => ({
+        ...group,
+        choices: group.choices.map((choice) => ({
+          ...choice,
+          priceModifier:
+            typeof choice.priceModifier === "number"
+              ? choice.priceModifier * 10
+              : choice.priceModifier,
+        })),
+      })),
+      detail: item.detail
+        ? {
+            ...item.detail,
+            addonGroups: item.detail.addonGroups?.map((group) => ({
+              ...group,
+              items: group.items.map((addon) => ({
+                ...addon,
+                priceModifier: addon.priceModifier * 10,
+              })),
+            })),
+            bundleSuggestions: item.detail.bundleSuggestions?.map((suggestion) => ({
+              ...suggestion,
+              priceModifier: suggestion.priceModifier * 10,
+            })),
+          }
+        : item.detail,
+    })),
+  };
+}
 
 type OptionSelections = Record<string, string>;
 type AddonSelections = Record<string, string[]>;
@@ -163,7 +200,10 @@ export default function RestaurantDetailScreen() {
   const { data: restaurantData, isLoading: restaurantLoading } =
     useRestaurantDetailQuery(id);
   const fallbackRestaurant = useMemo(
-    () => dummyRestaurants.find((item) => item.id === id) ?? dummyRestaurants[0],
+    () =>
+      normalizeLegacyFallbackRestaurant(
+        dummyRestaurants.find((item) => item.id === id) ?? dummyRestaurants[0],
+      ),
     [id],
   );
   const restaurant = restaurantData ?? fallbackRestaurant;
@@ -278,6 +318,11 @@ export default function RestaurantDetailScreen() {
       restaurant,
       item,
       unitTk: tk(item.price),
+      configuration: {
+        selectedOptions: [],
+        selectedAddons: [],
+        selectedBundleSuggestionIds: [],
+      },
     });
 
   const decrementMenuItem = (itemId: string) => {
@@ -321,6 +366,21 @@ export default function RestaurantDetailScreen() {
       quantity: sheetQty,
       unitTk: sheetUnitTk,
       summary,
+      configuration: {
+        selectedOptions: Object.entries(sheetChoices)
+          .filter(([, choiceId]) => Boolean(choiceId))
+          .map(([groupId, choiceId]) => ({
+            groupId,
+            choiceId,
+          })),
+        selectedAddons: Object.entries(sheetAddons)
+          .filter(([, itemIds]) => itemIds.length > 0)
+          .map(([groupId, itemIds]) => ({
+            groupId,
+            itemIds,
+          })),
+        selectedBundleSuggestionIds: sheetBundles,
+      },
       cartKey: buildCartKey(
         sheetItem,
         sheetChoices,

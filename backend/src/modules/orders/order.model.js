@@ -27,6 +27,51 @@ const orderLineItemSchema = new Schema(
       default: "",
       trim: true,
     },
+    configuration: {
+      selectedOptions: {
+        type: [
+          new Schema(
+            {
+              groupId: {
+                type: String,
+                required: true,
+                trim: true,
+              },
+              choiceId: {
+                type: String,
+                required: true,
+                trim: true,
+              },
+            },
+            { _id: false },
+          ),
+        ],
+        default: [],
+      },
+      selectedAddons: {
+        type: [
+          new Schema(
+            {
+              groupId: {
+                type: String,
+                required: true,
+                trim: true,
+              },
+              itemIds: {
+                type: [String],
+                default: [],
+              },
+            },
+            { _id: false },
+          ),
+        ],
+        default: [],
+      },
+      selectedBundleSuggestionIds: {
+        type: [String],
+        default: [],
+      },
+    },
   },
   {
     _id: true,
@@ -330,6 +375,23 @@ const orderSchema = new Schema(
       default: null,
     },
     deliveryAcceptedAt: {
+      type: Date,
+      default: null,
+    },
+    deliveryDispatchRound: {
+      type: Number,
+      default: 0,
+    },
+    deliveryDispatchWindowExpiresAt: {
+      type: Date,
+      default: null,
+    },
+    deliveryDispatchNotifiedPartnerIds: {
+      type: [Schema.Types.ObjectId],
+      ref: "User",
+      default: [],
+    },
+    deliveryDispatchExhaustedAt: {
       type: Date,
       default: null,
     },

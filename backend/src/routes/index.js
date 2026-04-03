@@ -7,6 +7,7 @@ const { userRoutes } = require("../modules/users/user.routes");
 const { addressRoutes } = require("../modules/addresses/address.routes");
 const { restaurantRoutes } = require("../modules/restaurants/restaurant.routes");
 const { favoriteRoutes } = require("../modules/favorites/favorite.routes");
+const { notificationRoutes } = require("../modules/notifications/notification.routes");
 const { orderRoutes } = require("../modules/orders/order.routes");
 const { uploadRoutes } = require("../modules/uploads/upload.routes");
 
@@ -28,6 +29,7 @@ router.use("/v1/addresses", addressRoutes);
 router.use("/v1/content", contentRoutes);
 router.use("/v1/restaurants", restaurantRoutes);
 router.use("/v1/favorites", favoriteRoutes);
+router.use("/v1/notifications", notificationRoutes);
 router.use("/v1/orders", orderRoutes);
 router.use("/v1/uploads", uploadRoutes);
 

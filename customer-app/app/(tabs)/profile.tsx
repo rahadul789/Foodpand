@@ -8,7 +8,7 @@ import { getInitials, useAuthStore } from "@/lib/auth-store";
 import { useActiveOrdersQuery, useOrderHistoryQuery } from "@/lib/order-queries";
 import { profileOptions } from "@/lib/customer-data";
 import { useSavedLocations } from "@/lib/location-store";
-import { getUnreadNotificationCount, useNotificationStore } from "@/lib/notification-store";
+import { useNotificationsQuery } from "@/lib/notification-queries";
 import { getRewardsProfile } from "@/lib/rewards";
 import { useUIStore } from "@/lib/ui-store";
 
@@ -17,11 +17,11 @@ export default function ProfileScreen() {
   const user = useAuthStore((state) => state.user);
   const signOut = useAuthStore((state) => state.signOut);
   const savedLocations = useSavedLocations();
-  const notifications = useNotificationStore((state) => state.notifications);
+  const { data: notificationsData } = useNotificationsQuery(user?.id ?? null, Boolean(user?.id));
   const { data: activeOrders = [] } = useActiveOrdersQuery(Boolean(user?.id));
   const { data: previousOrders = [] } = useOrderHistoryQuery(Boolean(user?.id));
   const showToast = useUIStore((state) => state.showToast);
-  const unreadNotifications = getUnreadNotificationCount(notifications);
+  const unreadNotifications = notificationsData?.unreadCount ?? 0;
   const totalOrders = previousOrders.length + activeOrders.length;
 
   if (!user) {

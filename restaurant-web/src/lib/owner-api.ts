@@ -32,21 +32,61 @@ export type OwnerRestaurant = {
     label: string;
     sortOrder: number;
   }>;
-  menuItems: Array<{
-    key: string;
-    name: string;
-    description: string;
-    price: number;
-    category: string;
-    popular?: boolean;
-    isActive?: boolean;
-  }>;
+  menuItems: OwnerMenuItem[];
 };
 
 export type OwnerMenuCategory = {
   key: string;
   label: string;
   sortOrder: number;
+};
+
+export type OwnerMenuItemOptionChoice = {
+  id: string;
+  label: string;
+  priceModifier: number;
+};
+
+export type OwnerMenuItemOptionGroup = {
+  id: string;
+  title: string;
+  required?: boolean;
+  minSelect?: number;
+  maxSelect?: number;
+  choices: OwnerMenuItemOptionChoice[];
+};
+
+export type OwnerMenuItemAddonItem = {
+  id: string;
+  label: string;
+  priceModifier: number;
+  popular?: boolean;
+};
+
+export type OwnerMenuItemAddonGroup = {
+  id: string;
+  title: string;
+  maxSelect?: number;
+  optionalLabel?: string;
+  description?: string;
+  items: OwnerMenuItemAddonItem[];
+};
+
+export type OwnerMenuItemBundleSuggestion = {
+  id: string;
+  label: string;
+  priceModifier: number;
+  accent?: string;
+  icon?: string;
+};
+
+export type OwnerMenuItemDetail = {
+  image?: string;
+  subtitle?: string;
+  addonGroups?: OwnerMenuItemAddonGroup[];
+  bundleSuggestions?: OwnerMenuItemBundleSuggestion[];
+  instructionsPlaceholder?: string;
+  maxInstructionsLength?: number;
 };
 
 export type OwnerMenuItem = {
@@ -57,8 +97,21 @@ export type OwnerMenuItem = {
   category: string;
   accent?: string;
   icon?: string;
+  optionGroups?: OwnerMenuItemOptionGroup[];
+  detail?: OwnerMenuItemDetail | null;
   popular?: boolean;
   isActive?: boolean;
+};
+
+export type UpsertOwnerMenuItemPayload = {
+  name: string;
+  description?: string;
+  price: number;
+  category?: string;
+  popular?: boolean;
+  isActive?: boolean;
+  optionGroups?: OwnerMenuItemOptionGroup[];
+  detail?: OwnerMenuItemDetail;
 };
 
 export type OwnerMenuResponse = {
@@ -220,14 +273,7 @@ export async function createMenuCategoryRequest(
 
 export async function createMenuItemRequest(
   token: string,
-  payload: {
-    name: string;
-    description?: string;
-    price: number;
-    category?: string;
-    popular?: boolean;
-    isActive?: boolean;
-  },
+  payload: UpsertOwnerMenuItemPayload,
 ) {
   const response = await apiPost<{
     restaurantId: string;
@@ -239,14 +285,7 @@ export async function createMenuItemRequest(
 export async function updateMenuItemRequest(
   token: string,
   itemKey: string,
-  payload: {
-    name: string;
-    description?: string;
-    price: number;
-    category?: string;
-    popular?: boolean;
-    isActive?: boolean;
-  },
+  payload: UpsertOwnerMenuItemPayload,
 ) {
   const response = await apiPatch<{
     restaurantId: string;

@@ -58,6 +58,10 @@ export function RestaurantPage() {
   const [editForm, setEditForm] = useState<RestaurantFormState>(initialRestaurantForm);
   const [uploadError, setUploadError] = useState("");
   const [uploadingField, setUploadingField] = useState<"coverImage" | "logoImage" | null>(null);
+  const tagCount = restaurant?.tags?.length ?? 0;
+  const prepWindowLabel = restaurant
+    ? `${restaurant.defaultPrepMinMinutes}-${restaurant.defaultPrepMaxMinutes} min`
+    : "15-20 min";
 
   useEffect(() => {
     if (!restaurant) {
@@ -162,6 +166,26 @@ export function RestaurantPage() {
             Profile media now supports Cloudinary signed uploads, so logo and cover images stay backend-safe.
           </p>
         </div>
+        <div className="hero-pill">{restaurant ? prepWindowLabel : "Owner setup"}</div>
+      </section>
+
+      <section className="stats-grid stats-grid-compact">
+        <article className="stat-card">
+          <span className="stat-label">Menu items</span>
+          <strong className="stat-value stat-value-compact">
+            {restaurant?.menuItems.length ?? 0}
+          </strong>
+        </article>
+        <article className="stat-card">
+          <span className="stat-label">Active offers</span>
+          <strong className="stat-value stat-value-compact">
+            {restaurant?.offers.filter((offer) => offer.isActive !== false).length ?? 0}
+          </strong>
+        </article>
+        <article className="stat-card">
+          <span className="stat-label">Tags configured</span>
+          <strong className="stat-value stat-value-compact">{tagCount}</strong>
+        </article>
       </section>
 
       <section className="grid-two">

@@ -187,7 +187,7 @@ function mapMenuItem(item: MenuItemDto): MenuItem {
     id: item.key,
     name: item.name,
     description: item.description,
-    price: item.price / 10,
+    price: item.price,
     accent: item.accent,
     icon: item.icon,
     category: item.category,

@@ -12,22 +12,26 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import * as SecureStore from "expo-secure-store";
 import MapView, { Marker, Polyline } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useAuthStore } from "@/lib/auth-store";
+import { updateRiderAvailability } from "@/lib/delivery-presence";
 import { useDeliveryLiveLocation } from "@/lib/live-location";
 import type { DeliveryOrder } from "@/lib/order-api";
+import { removeDeliveryPushTokenFromBackend } from "@/lib/push-notifications";
 import { getLiveRouteMetrics } from "@/lib/route-metrics";
 import {
   useAcceptDeliveryMutation,
   useAssignedDeliveryOrdersQuery,
   useAvailableDeliveryOrdersQuery,
-  useDeliveryOrdersRealtime,
   useDeliveryOrderStatusMutation,
 } from "@/lib/order-queries";
 
 const EMPTY_ORDERS: DeliveryOrder[] = [];
+const PUSH_TOKEN_KEY = "delivery-app-push-token";
+type DeliveryTab = "home" | "active" | "profile";
 function RiderPin({ heading = 0 }: { heading?: number }) {
   return (
     <View style={styles.mapMarkerWrap}>
@@ -81,6 +85,27 @@ function formatPlacedAt(value?: string) {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function getDispatchLabel(order: DeliveryOrder, now: number) {
+  if (order.deliveryDispatchWindowExpiresAt) {
+    const secondsLeft = Math.max(
+      0,
+      Math.ceil(
+        (new Date(order.deliveryDispatchWindowExpiresAt).getTime() - now) / 1000,
+      ),
+    );
+
+    if (secondsLeft > 0) {
+      return `Round ${order.deliveryDispatchRound || 1} · ${secondsLeft}s left`;
+    }
+  }
+
+  if (order.deliveryDispatchExhaustedAt) {
+    return "Fallback pool";
+  }
+
+  return undefined;
 }
 
 function LoginCard() {
@@ -165,6 +190,34 @@ function StatChip({
   );
 }
 
+function DeliveryTabButton({
+  label,
+  icon,
+  active,
+  onPress,
+}: {
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  active: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[styles.tabButton, active ? styles.tabButtonActive : null]}
+    >
+      <Ionicons
+        name={icon}
+        size={16}
+        color={active ? "#FFF8F1" : "#7B8794"}
+      />
+      <Text style={[styles.tabButtonText, active ? styles.tabButtonTextActive : null]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
 function OrdersSkeleton({ title }: { title: string }) {
   return (
     <View style={styles.section}>
@@ -235,17 +288,19 @@ function DeliveryOrderCard({
 
 export default function DeliveryHomeScreen() {
   const user = useAuthStore((state) => state.user);
+  const setUser = useAuthStore((state) => state.setUser);
   const logout = useAuthStore((state) => state.logout);
   const token = useAuthStore((state) => state.accessToken);
   const isAuthenticated = useAuthStore((state) => Boolean(state.user?.id && state.accessToken));
-
-  useDeliveryOrdersRealtime(isAuthenticated);
 
   const availableOrdersQuery = useAvailableDeliveryOrdersQuery(isAuthenticated);
   const assignedOrdersQuery = useAssignedDeliveryOrdersQuery(isAuthenticated);
   const acceptDeliveryMutation = useAcceptDeliveryMutation();
   const updateStatusMutation = useDeliveryOrderStatusMutation();
   const customerPulse = useRef(new Animated.Value(1)).current;
+  const [activeTab, setActiveTab] = useState<DeliveryTab>("home");
+  const [presencePending, setPresencePending] = useState(false);
+  const [dispatchNow, setDispatchNow] = useState(() => Date.now());
 
   const availableOrders = availableOrdersQuery.data ?? EMPTY_ORDERS;
   const assignedOrders = assignedOrdersQuery.data ?? EMPTY_ORDERS;
@@ -316,6 +371,8 @@ export default function DeliveryHomeScreen() {
   }, [liveLocation.currentLocation, liveOrder]);
 
   const riderName = user?.name?.split(" ")[0] || "Rider";
+  const riderIsOnline = user?.deliveryAvailability?.isOnline !== false;
+  const acceptsNewOrders = user?.deliveryAvailability?.acceptsNewOrders !== false;
   const isRefreshing =
     availableOrdersQuery.isRefetching || assignedOrdersQuery.isRefetching;
 
@@ -348,6 +405,77 @@ export default function DeliveryHomeScreen() {
     return () => loop.stop();
   }, [customerPulse, liveOrder]);
 
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setDispatchNow(Date.now());
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, []);
+
+  const handleToggleOnline = async () => {
+    if (!token || !user) {
+      return;
+    }
+
+    setPresencePending(true);
+    try {
+      const nextUser = await updateRiderAvailability(token, {
+        isOnline: !riderIsOnline,
+        acceptsNewOrders,
+        deliveryTransportMode: user.deliveryTransportMode ?? "bicycle",
+      });
+      setUser(nextUser);
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setPresencePending(false);
+    }
+  };
+
+  const handleToggleAccepting = async () => {
+    if (!token || !user) {
+      return;
+    }
+
+    setPresencePending(true);
+    try {
+      const nextUser = await updateRiderAvailability(token, {
+        isOnline: riderIsOnline,
+        acceptsNewOrders: !acceptsNewOrders,
+        deliveryTransportMode: user.deliveryTransportMode ?? "bicycle",
+      });
+      setUser(nextUser);
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setPresencePending(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (token) {
+      try {
+        const savedPushToken = await SecureStore.getItemAsync(PUSH_TOKEN_KEY);
+        await updateRiderAvailability(token, {
+          isOnline: false,
+          acceptsNewOrders: false,
+          deliveryTransportMode: user?.deliveryTransportMode ?? "bicycle",
+        });
+        await removeDeliveryPushTokenFromBackend(token, savedPushToken);
+        if (savedPushToken) {
+          await SecureStore.deleteItemAsync(PUSH_TOKEN_KEY);
+        }
+      } catch {
+        // Cleanup should not block logout.
+      }
+    }
+
+    logout();
+  };
+
   if (!isAuthenticated) {
     return (
       <SafeAreaView style={styles.screen}>
@@ -369,18 +497,24 @@ export default function DeliveryHomeScreen() {
             <Text style={styles.eyebrow}>DELIVERY PANEL</Text>
             <Text style={styles.title}>Hi {riderName}, ready to move?</Text>
             <Text style={styles.subtitle}>
-              You can accept multiple orders, but only one picked-up order can share live location at a time.
+              {activeTab === "home"
+                ? "Nearby selected delivery partners receive push first. You can still accept multiple orders, but only one picked-up route can go live at a time."
+                : activeTab === "active"
+                  ? "Track your live route here, then finish delivery before starting the next active map share."
+                  : "Control whether dispatch should include you in targeted pickup notifications."}
             </Text>
           </View>
 
-          <Pressable style={styles.ghostButton} onPress={logout}>
-            <Text style={styles.ghostButtonText}>Logout</Text>
-          </Pressable>
+          <View style={styles.headerPill}>
+            <Text style={styles.headerPillText}>
+              {riderIsOnline ? "Online" : "Offline"}
+            </Text>
+          </View>
         </View>
 
         <View style={styles.statsRow}>
+          <StatChip label="Online" value={riderIsOnline ? "Yes" : "No"} />
           <StatChip label="Available" value={String(availableOrders.length)} />
-          <StatChip label="Assigned" value={String(assignedOrders.length)} />
           <StatChip
             label="Live route"
             value={liveOrder ? liveOrder.orderCode || liveOrder.id : "None"}
@@ -388,203 +522,343 @@ export default function DeliveryHomeScreen() {
           />
         </View>
 
-        {liveOrder ? (
-          <View style={styles.livePanel}>
-            <Text style={styles.livePanelTitle}>Live route is active</Text>
-            <Text style={styles.livePanelSubtitle}>
-              {liveOrder.orderCode || liveOrder.id} | {liveLocation.statusText}
-            </Text>
-            {liveMapRegion ? (
-              <View style={styles.liveMapWrap}>
-                <MapView
-                  style={styles.liveMap}
-                  region={liveMapRegion}
-                  scrollEnabled={false}
-                  rotateEnabled={false}
-                  pitchEnabled={false}
-                  zoomEnabled={false}
-                  toolbarEnabled={false}
-                >
-                  {liveOrder.deliveryLocation ? (
-                    <Marker
-                      coordinate={{
-                        latitude: liveOrder.deliveryLocation.latitude,
-                        longitude: liveOrder.deliveryLocation.longitude,
+        {activeTab === "home" ? (
+          <>
+            {!riderIsOnline ? (
+              <View style={styles.infoPanel}>
+                <Text style={styles.infoPanelTitle}>You are offline</Text>
+                <Text style={styles.infoPanelText}>
+                  Turn online on from the Profile tab so the dispatch system can include you in nearby pickup alerts.
+                </Text>
+              </View>
+            ) : null}
+            {availableOrdersQuery.isLoading ? (
+              <OrdersSkeleton title="Available orders" />
+            ) : (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Available orders</Text>
+                {availableOrders.length === 0 ? (
+                  <View style={styles.emptyCard}>
+                    <Text style={styles.emptyTitle}>No open delivery task</Text>
+                    <Text style={styles.emptyText}>
+                      New delivery tasks will appear here when restaurants mark orders ready.
+                    </Text>
+                  </View>
+                ) : (
+                  availableOrders.map((order) => (
+                    <DeliveryOrderCard
+                      key={order.id}
+                      order={order}
+                      actionLabel="Accept delivery"
+                      actionDisabled={acceptDeliveryMutation.isPending || !riderIsOnline || !acceptsNewOrders}
+                      footer={
+                        getDispatchLabel(order, dispatchNow)
+                          ? `${getDispatchLabel(order, dispatchNow)}. Accepting moves this task into your assigned queue.`
+                          : "Nearby selected riders receive the push first. Accepting moves this task into your assigned queue."
+                      }
+                      onAction={() => {
+                        void acceptDeliveryMutation.mutateAsync(order.id);
+                        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                       }}
-                      anchor={{ x: 0.5, y: 0.88 }}
-                      tracksViewChanges
-                    >
-                      <CustomerPin pulse={customerPulse} />
-                    </Marker>
-                  ) : null}
-                  {liveLocation.currentLocation || liveOrder.deliveryLiveLocation ? (
-                    <Marker
-                      coordinate={{
-                        latitude:
-                          liveLocation.currentLocation?.latitude ??
-                          (liveOrder.deliveryLiveLocation?.latitude as number),
-                        longitude:
-                          liveLocation.currentLocation?.longitude ??
-                          (liveOrder.deliveryLiveLocation?.longitude as number),
-                      }}
-                      anchor={{ x: 0.5, y: 0.88 }}
-                      tracksViewChanges
-                    >
-                      <RiderPin
-                        heading={
-                          liveLocation.currentLocation?.heading ??
-                          liveOrder.deliveryLiveLocation?.heading ??
-                          0
-                        }
-                      />
-                    </Marker>
-                  ) : null}
-                  {liveOrder.deliveryLocation &&
-                  (liveLocation.currentLocation || liveOrder.deliveryLiveLocation) ? (
-                    <Polyline
-                      coordinates={[
-                        {
-                          latitude:
-                            liveLocation.currentLocation?.latitude ??
-                            (liveOrder.deliveryLiveLocation?.latitude as number),
-                          longitude:
-                            liveLocation.currentLocation?.longitude ??
-                            (liveOrder.deliveryLiveLocation?.longitude as number),
-                        },
-                        {
-                          latitude: liveOrder.deliveryLocation.latitude,
-                          longitude: liveOrder.deliveryLocation.longitude,
-                        },
-                      ]}
-                      strokeColor="#E8792A"
-                      strokeWidth={4}
-                      lineDashPattern={[8, 8]}
                     />
-                  ) : null}
-                </MapView>
+                  ))
+                )}
               </View>
-            ) : null}
-            {liveRouteMetrics ? (
-              <View style={styles.liveMapBadge}>
-                <View style={styles.liveMapBadgeIcon}>
-                  <Ionicons name="time-outline" size={15} color="#243040" />
-                </View>
-                <View style={styles.liveMapBadgeCopy}>
-                  <Text style={styles.liveMapBadgeTitle}>{liveRouteMetrics.etaLabel}</Text>
-                  <Text style={styles.liveMapBadgeText}>{liveRouteMetrics.distanceLabel} to customer</Text>
-                </View>
-              </View>
-            ) : null}
-            <View style={styles.liveMeterTrack}>
-              <View style={styles.liveMeterFill} />
+            )}
+            <View style={styles.infoPanel}>
+              <Text style={styles.infoPanelTitle}>Assigned summary</Text>
+              <Text style={styles.infoPanelText}>
+                You currently have {assignedOrders.length} assigned order{assignedOrders.length === 1 ? "" : "s"}.
+                Use the Active tab for pickup start and live customer tracking.
+              </Text>
             </View>
-            <Text style={styles.liveHint}>
-              {liveRouteMetrics
-                ? `${liveRouteMetrics.distanceLabel} left | ${liveRouteMetrics.etaLabel}. This customer is receiving your live route.`
-                : "This order is sharing live location with the customer. Mark it delivered before starting the next live route."}
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.infoPanel}>
-            <Text style={styles.infoPanelTitle}>No live route yet</Text>
-            <Text style={styles.infoPanelText}>
-              Start a ready-for-pickup order and live location sharing will begin automatically.
-            </Text>
-          </View>
-        )}
+          </>
+        ) : null}
 
-        {assignedOrdersQuery.isLoading ? (
-          <OrdersSkeleton title="Assigned orders" />
-        ) : (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Assigned orders</Text>
-            {assignedOrders.length === 0 ? (
-              <View style={styles.emptyCard}>
-                <Text style={styles.emptyTitle}>No assigned order yet</Text>
-                <Text style={styles.emptyText}>
-                  Accept an order from the available list and it will appear here.
+        {activeTab === "active" ? (
+          <>
+            {liveOrder ? (
+              <View style={styles.livePanel}>
+                <Text style={styles.livePanelTitle}>Live route is active</Text>
+                <Text style={styles.livePanelSubtitle}>
+                  {liveOrder.orderCode || liveOrder.id} | {liveLocation.statusText}
+                </Text>
+                {liveMapRegion ? (
+                  <View style={styles.liveMapWrap}>
+                    <MapView
+                      style={styles.liveMap}
+                      region={liveMapRegion}
+                      scrollEnabled={false}
+                      rotateEnabled={false}
+                      pitchEnabled={false}
+                      zoomEnabled={false}
+                      toolbarEnabled={false}
+                    >
+                      {liveOrder.deliveryLocation ? (
+                        <Marker
+                          coordinate={{
+                            latitude: liveOrder.deliveryLocation.latitude,
+                            longitude: liveOrder.deliveryLocation.longitude,
+                          }}
+                          anchor={{ x: 0.5, y: 0.88 }}
+                          tracksViewChanges
+                        >
+                          <CustomerPin pulse={customerPulse} />
+                        </Marker>
+                      ) : null}
+                      {liveLocation.currentLocation || liveOrder.deliveryLiveLocation ? (
+                        <Marker
+                          coordinate={{
+                            latitude:
+                              liveLocation.currentLocation?.latitude ??
+                              (liveOrder.deliveryLiveLocation?.latitude as number),
+                            longitude:
+                              liveLocation.currentLocation?.longitude ??
+                              (liveOrder.deliveryLiveLocation?.longitude as number),
+                          }}
+                          anchor={{ x: 0.5, y: 0.88 }}
+                          tracksViewChanges
+                        >
+                          <RiderPin
+                            heading={
+                              liveLocation.currentLocation?.heading ??
+                              liveOrder.deliveryLiveLocation?.heading ??
+                              0
+                            }
+                          />
+                        </Marker>
+                      ) : null}
+                      {liveOrder.deliveryLocation &&
+                      (liveLocation.currentLocation || liveOrder.deliveryLiveLocation) ? (
+                        <Polyline
+                          coordinates={[
+                            {
+                              latitude:
+                                liveLocation.currentLocation?.latitude ??
+                                (liveOrder.deliveryLiveLocation?.latitude as number),
+                              longitude:
+                                liveLocation.currentLocation?.longitude ??
+                                (liveOrder.deliveryLiveLocation?.longitude as number),
+                            },
+                            {
+                              latitude: liveOrder.deliveryLocation.latitude,
+                              longitude: liveOrder.deliveryLocation.longitude,
+                            },
+                          ]}
+                          strokeColor="#E8792A"
+                          strokeWidth={4}
+                          lineDashPattern={[8, 8]}
+                        />
+                      ) : null}
+                    </MapView>
+                  </View>
+                ) : null}
+                {liveRouteMetrics ? (
+                  <View style={styles.liveMapBadge}>
+                    <View style={styles.liveMapBadgeIcon}>
+                      <Ionicons name="time-outline" size={15} color="#243040" />
+                    </View>
+                    <View style={styles.liveMapBadgeCopy}>
+                      <Text style={styles.liveMapBadgeTitle}>{liveRouteMetrics.etaLabel}</Text>
+                      <Text style={styles.liveMapBadgeText}>
+                        {liveRouteMetrics.distanceLabel} to customer
+                      </Text>
+                    </View>
+                  </View>
+                ) : null}
+                <View style={styles.liveMeterTrack}>
+                  <View style={styles.liveMeterFill} />
+                </View>
+                <Text style={styles.liveHint}>
+                  {liveRouteMetrics
+                    ? `${liveRouteMetrics.distanceLabel} left | ${liveRouteMetrics.etaLabel}. This customer is receiving your live route.`
+                    : "This order is sharing live location with the customer. Mark it delivered before starting the next live route."}
                 </Text>
               </View>
             ) : (
-              assignedOrders.map((order) => {
-                const isLive = order.status === "On the way";
-                const actionLabel = isLive
-                  ? "Mark delivered"
-                  : order.status === "Ready for pickup"
-                    ? "Start route"
-                    : undefined;
-                const actionDisabled =
-                  updateStatusMutation.isPending ||
-                  (order.status === "Ready for pickup" && Boolean(liveOrder));
-                const footer = isLive
-                  ? "Live location is being shared for this order."
-                  : order.status === "Ready for pickup" && liveOrder
-                    ? "Finish current live route before starting another pickup."
-                    : "Accepted by you. Start route after pickup.";
-
-                return (
-                  <DeliveryOrderCard
-                    key={order.id}
-                    order={order}
-                    accent={isLive ? "live" : "neutral"}
-                    actionLabel={actionLabel}
-                    actionDisabled={actionDisabled}
-                    footer={footer}
-                    onAction={() => {
-                      if (isLive) {
-                        void updateStatusMutation.mutateAsync({
-                          orderId: order.id,
-                          payload: { status: "Delivered" },
-                        });
-                        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                        return;
-                      }
-
-                      if (order.status === "Ready for pickup") {
-                        void updateStatusMutation.mutateAsync({
-                          orderId: order.id,
-                          payload: { status: "On the way" },
-                        });
-                        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                      }
-                    }}
-                  />
-                );
-              })
+              <View style={styles.infoPanel}>
+                <Text style={styles.infoPanelTitle}>No live route yet</Text>
+                <Text style={styles.infoPanelText}>
+                  Start a ready-for-pickup order and live location sharing will begin automatically.
+                </Text>
+              </View>
             )}
-          </View>
-        )}
 
-        {availableOrdersQuery.isLoading ? (
-          <OrdersSkeleton title="Available orders" />
-        ) : (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Available orders</Text>
-            {availableOrders.length === 0 ? (
-              <View style={styles.emptyCard}>
-                <Text style={styles.emptyTitle}>No open delivery task</Text>
-                <Text style={styles.emptyText}>
-                  New delivery tasks will appear here when restaurants mark orders ready.
+            {assignedOrdersQuery.isLoading ? (
+              <OrdersSkeleton title="Assigned orders" />
+            ) : (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Assigned orders</Text>
+                {assignedOrders.length === 0 ? (
+                  <View style={styles.emptyCard}>
+                    <Text style={styles.emptyTitle}>No assigned order yet</Text>
+                    <Text style={styles.emptyText}>
+                      Accept an order from the Home tab and it will appear here.
+                    </Text>
+                  </View>
+                ) : (
+                  assignedOrders.map((order) => {
+                    const isLive = order.status === "On the way";
+                    const actionLabel = isLive
+                      ? "Mark delivered"
+                      : order.status === "Ready for pickup"
+                        ? "Start route"
+                        : undefined;
+                    const actionDisabled =
+                      updateStatusMutation.isPending ||
+                      (order.status === "Ready for pickup" && Boolean(liveOrder));
+                    const footer = isLive
+                      ? "Live location is being shared for this order."
+                      : order.status === "Ready for pickup" && liveOrder
+                        ? "Finish current live route before starting another pickup."
+                        : "Accepted by you. Start route after pickup.";
+
+                    return (
+                      <DeliveryOrderCard
+                        key={order.id}
+                        order={order}
+                        accent={isLive ? "live" : "neutral"}
+                        actionLabel={actionLabel}
+                        actionDisabled={actionDisabled}
+                        footer={footer}
+                        onAction={() => {
+                          if (isLive) {
+                            void updateStatusMutation.mutateAsync({
+                              orderId: order.id,
+                              payload: { status: "Delivered" },
+                            });
+                            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                            return;
+                          }
+
+                          if (order.status === "Ready for pickup") {
+                            void updateStatusMutation.mutateAsync({
+                              orderId: order.id,
+                              payload: { status: "On the way" },
+                            });
+                            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                          }
+                        }}
+                      />
+                    );
+                  })
+                )}
+              </View>
+            )}
+          </>
+        ) : null}
+
+        {activeTab === "profile" ? (
+          <>
+            <View style={styles.profileCard}>
+              <View style={styles.profileAvatar}>
+                <Text style={styles.profileAvatarText}>
+                  {user?.name?.slice(0, 1)?.toUpperCase() || "R"}
                 </Text>
               </View>
-            ) : (
-              availableOrders.map((order) => (
-                <DeliveryOrderCard
-                  key={order.id}
-                  order={order}
-                  actionLabel="Accept delivery"
-                  actionDisabled={acceptDeliveryMutation.isPending}
-                  footer="Accepting this task moves it into your assigned list."
-                  onAction={() => {
-                    void acceptDeliveryMutation.mutateAsync(order.id);
-                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              <View style={styles.profileCopy}>
+                <Text style={styles.profileName}>{user?.name}</Text>
+                <Text style={styles.profileMeta}>{user?.email}</Text>
+                <Text style={styles.profileMeta}>
+                  Mode: {user?.deliveryTransportMode || "bicycle"}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Availability</Text>
+              <View style={styles.profileActionCard}>
+                <View style={styles.profileActionCopy}>
+                  <Text style={styles.profileActionTitle}>Rider online</Text>
+                  <Text style={styles.profileActionText}>
+                    Nearby targeted delivery notifications will only go to riders who are online.
+                  </Text>
+                </View>
+                <Pressable
+                  style={[
+                    styles.profileActionButton,
+                    riderIsOnline ? styles.profileActionButtonActive : null,
+                    presencePending ? styles.buttonDisabled : null,
+                  ]}
+                  disabled={presencePending}
+                  onPress={() => {
+                    void handleToggleOnline();
                   }}
-                />
-              ))
-            )}
-          </View>
-        )}
+                >
+                  <Text
+                    style={[
+                      styles.profileActionButtonText,
+                      riderIsOnline ? styles.profileActionButtonTextActive : null,
+                    ]}
+                  >
+                    {riderIsOnline ? "Online" : "Offline"}
+                  </Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.profileActionCard}>
+                <View style={styles.profileActionCopy}>
+                  <Text style={styles.profileActionTitle}>Accept new orders</Text>
+                  <Text style={styles.profileActionText}>
+                    Keep this on if you want the dispatch system to include you in pickup offers.
+                  </Text>
+                </View>
+                <Pressable
+                  style={[
+                    styles.profileActionButton,
+                    acceptsNewOrders ? styles.profileActionButtonActive : null,
+                    presencePending ? styles.buttonDisabled : null,
+                  ]}
+                  disabled={presencePending}
+                  onPress={() => {
+                    void handleToggleAccepting();
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.profileActionButtonText,
+                      acceptsNewOrders ? styles.profileActionButtonTextActive : null,
+                    ]}
+                  >
+                    {acceptsNewOrders ? "Accepting" : "Paused"}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+
+            <View style={styles.infoPanel}>
+              <Text style={styles.infoPanelTitle}>How delivery notifications work</Text>
+              <Text style={styles.infoPanelText}>
+                The backend now notifies a small nearby batch of online riders instead of sending every order to everyone at once.
+              </Text>
+            </View>
+
+            <Pressable style={styles.ghostButton} onPress={() => void handleLogout()}>
+              <Text style={styles.ghostButtonText}>Logout</Text>
+            </Pressable>
+          </>
+        ) : null}
       </ScrollView>
+      <View style={styles.bottomTabBar}>
+        <DeliveryTabButton
+          label="Home"
+          icon="home-outline"
+          active={activeTab === "home"}
+          onPress={() => setActiveTab("home")}
+        />
+        <DeliveryTabButton
+          label="Active"
+          icon="bicycle-outline"
+          active={activeTab === "active"}
+          onPress={() => setActiveTab("active")}
+        />
+        <DeliveryTabButton
+          label="Profile"
+          icon="person-outline"
+          active={activeTab === "profile"}
+          onPress={() => setActiveTab("profile")}
+        />
+      </View>
     </SafeAreaView>
   );
 }
@@ -663,6 +937,19 @@ const styles = StyleSheet.create({
   header: {
     gap: 14,
   },
+  headerPill: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: "#FFF2E4",
+    borderWidth: 1,
+    borderColor: "#F0D7BF",
+  },
+  headerPillText: {
+    color: "#A3501B",
+    fontWeight: "700",
+  },
   title: {
     marginTop: 4,
     fontSize: 28,
@@ -676,6 +963,44 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: "#627182",
     maxWidth: "94%",
+  },
+  tabRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  bottomTabBar: {
+    flexDirection: "row",
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 14,
+    backgroundColor: "rgba(255,248,240,0.98)",
+    borderTopWidth: 1,
+    borderTopColor: "#EEDFD2",
+  },
+  tabButton: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 18,
+    backgroundColor: "#FFFDFC",
+    borderWidth: 1,
+    borderColor: "#EEDFD2",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  tabButtonActive: {
+    backgroundColor: "#1F2937",
+    borderColor: "#1F2937",
+  },
+  tabButtonText: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#7B8794",
+  },
+  tabButtonTextActive: {
+    color: "#FFF8F1",
   },
   ghostButton: {
     alignSelf: "flex-start",
@@ -873,6 +1198,81 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     color: "#667482",
+  },
+  profileCard: {
+    flexDirection: "row",
+    gap: 14,
+    alignItems: "center",
+    padding: 18,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: "#EEDFD2",
+    backgroundColor: "#FFFDFC",
+  },
+  profileAvatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#1F2937",
+  },
+  profileAvatarText: {
+    color: "#FFF9F4",
+    fontSize: 22,
+    fontWeight: "800",
+  },
+  profileCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  profileName: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#243040",
+  },
+  profileMeta: {
+    fontSize: 14,
+    color: "#667482",
+  },
+  profileActionCard: {
+    borderRadius: 22,
+    backgroundColor: "#FFFDFC",
+    borderWidth: 1,
+    borderColor: "#EEDFD2",
+    padding: 18,
+    gap: 12,
+  },
+  profileActionCopy: {
+    gap: 4,
+  },
+  profileActionTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#243040",
+  },
+  profileActionText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: "#667482",
+  },
+  profileActionButton: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 16,
+    backgroundColor: "#FFF2E4",
+  },
+  profileActionButtonActive: {
+    backgroundColor: "#1F2937",
+  },
+  profileActionButtonText: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#9B5324",
+  },
+  profileActionButtonTextActive: {
+    color: "#FFF8F1",
   },
   section: {
     gap: 12,

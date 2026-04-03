@@ -26,7 +26,11 @@ import { useAuthStore } from "@/lib/auth-store";
 import { getResolvedOrder } from "@/lib/order-store";
 import { useCustomerOrderRealtime } from "@/lib/order-realtime";
 import { getLiveRouteMetrics } from "@/lib/route-metrics";
-import { formatTimeLabel, getDisplayOrderCode, getDynamicPrepareRange } from "@/lib/order-timing";
+import {
+  formatTimeLabel,
+  getDisplayOrderCode,
+  getDynamicPrepareRange,
+} from "@/lib/order-timing";
 import {
   useActiveOrdersQuery,
   useOrderDetailQuery,
@@ -149,11 +153,7 @@ function RiderMapMarker({
   );
 }
 
-function DestinationMapMarker({
-  pulse,
-}: {
-  pulse: Animated.Value;
-}) {
+function DestinationMapMarker({ pulse }: { pulse: Animated.Value }) {
   return (
     <View style={styles.mapMarkerWrap}>
       <Animated.View
@@ -187,8 +187,10 @@ export default function TrackingScreen() {
     payment?: string;
     orderId?: string;
   }>();
-  const { data: activeOrders = [], isLoading: activeLoading } = useActiveOrdersQuery(Boolean(user?.id));
-  const { data: previousOrders = [], isLoading: historyLoading } = useOrderHistoryQuery(Boolean(user?.id));
+  const { data: activeOrders = [], isLoading: activeLoading } =
+    useActiveOrdersQuery(Boolean(user?.id));
+  const { data: previousOrders = [], isLoading: historyLoading } =
+    useOrderHistoryQuery(Boolean(user?.id));
   const { data: detailOrder, isLoading: detailLoading } = useOrderDetailQuery(
     params.orderId,
     Boolean(user?.id && params.orderId),
@@ -211,7 +213,9 @@ export default function TrackingScreen() {
 
     if (params.orderId) {
       return getResolvedOrder(
-        pool.find((entry) => entry.id === params.orderId) ?? activeOrders[0] ?? null,
+        pool.find((entry) => entry.id === params.orderId) ??
+          activeOrders[0] ??
+          null,
       );
     }
 
@@ -237,16 +241,25 @@ export default function TrackingScreen() {
   const mapRegion = useMemo(() => {
     if (order?.deliveryLiveLocation && order?.deliveryLocation) {
       const centerLatitude =
-        (order.deliveryLiveLocation.latitude + order.deliveryLocation.latitude) / 2;
+        (order.deliveryLiveLocation.latitude +
+          order.deliveryLocation.latitude) /
+        2;
       const centerLongitude =
-        (order.deliveryLiveLocation.longitude + order.deliveryLocation.longitude) / 2;
+        (order.deliveryLiveLocation.longitude +
+          order.deliveryLocation.longitude) /
+        2;
       const latitudeDelta = Math.max(
         0.004,
-        Math.abs(order.deliveryLiveLocation.latitude - order.deliveryLocation.latitude) * 1.35,
+        Math.abs(
+          order.deliveryLiveLocation.latitude - order.deliveryLocation.latitude,
+        ) * 1.35,
       );
       const longitudeDelta = Math.max(
         0.004,
-        Math.abs(order.deliveryLiveLocation.longitude - order.deliveryLocation.longitude) * 1.35,
+        Math.abs(
+          order.deliveryLiveLocation.longitude -
+            order.deliveryLocation.longitude,
+        ) * 1.35,
       );
 
       return {
@@ -279,7 +292,12 @@ export default function TrackingScreen() {
   }, [order]);
 
   const prepProgress = useMemo(() => {
-    if (!order || order.status !== "Preparing" || !order.restaurantAcceptedAt || !order.estimatedReadyAt) {
+    if (
+      !order ||
+      order.status !== "Preparing" ||
+      !order.restaurantAcceptedAt ||
+      !order.estimatedReadyAt
+    ) {
       return null;
     }
 
@@ -303,15 +321,14 @@ export default function TrackingScreen() {
     return {
       progress,
       delayed: dynamicRange?.delayed ?? remainingMs < 0,
-      remainingMinutes: dynamicRange?.remainingMinutes ?? Math.max(0, Math.ceil(remainingMs / 60000)),
+      remainingMinutes:
+        dynamicRange?.remainingMinutes ??
+        Math.max(0, Math.ceil(remainingMs / 60000)),
       acceptedLabel: formatTimeLabel(order.restaurantAcceptedAt),
       readyLabel: formatTimeLabel(order.estimatedReadyAt),
       rangeLabel: dynamicRange?.displayLabel ?? "Preparing",
     };
-  }, [
-    order,
-    progressNow,
-  ]);
+  }, [order, progressNow]);
 
   usePreventRemove(lockBackNavigation && !allowLeave, () => {});
 
@@ -435,9 +452,9 @@ export default function TrackingScreen() {
       ? "restaurant-outline"
       : isReadyForPickup
         ? "checkmark-circle-outline"
-      : isDelivered
-        ? "checkmark-done-outline"
-        : "bicycle";
+        : isDelivered
+          ? "checkmark-done-outline"
+          : "bicycle";
   const stageMessage = isPendingAcceptance
     ? `The restaurant is reviewing ${order.items.join(", ")}. Cancellation stays open until acceptance.`
     : isPreparing
@@ -447,9 +464,10 @@ export default function TrackingScreen() {
           ? `${order.riderName} accepted your order and will pick it up shortly from ${order.restaurantName}.`
           : `${order.restaurantName} has finished preparing your order. A delivery partner will accept it soon.`
         : isDelivered
-      ? `${order.items.join(", ")} was delivered successfully.`
-      : `Your courier is on the way with ${order.items.join(", ")}.`;
-  const liveEtaLabel = isOnTheWay && liveRouteMetrics ? liveRouteMetrics.etaLabel : order.eta;
+          ? `${order.items.join(", ")} was delivered successfully.`
+          : `Your courier is on the way with ${order.items.join(", ")}.`;
+  const liveEtaLabel =
+    isOnTheWay && liveRouteMetrics ? liveRouteMetrics.etaLabel : order.eta;
   const prepHeadline = prepProgress?.delayed
     ? "Kitchen is taking a little longer than expected"
     : prepProgress?.remainingMinutes
@@ -459,7 +477,9 @@ export default function TrackingScreen() {
     ? prepProgress.delayed
       ? "The restaurant is still preparing your order. We will update you as soon as it is ready."
       : `Estimated prepare time ${prepProgress.rangeLabel}${
-          prepProgress.readyLabel ? ` - Ready around ${prepProgress.readyLabel}` : ""
+          prepProgress.readyLabel
+            ? ` - Ready around ${prepProgress.readyLabel}`
+            : ""
         }`
     : null;
 
@@ -492,8 +512,8 @@ export default function TrackingScreen() {
           />
           <Text style={styles.successTitle}>Yay, your order is confirmed</Text>
           <Text style={styles.successText}>
-            The restaurant will review your order first. You can cancel before it
-            gets accepted.
+            The restaurant will review your order first. You can cancel before
+            it gets accepted.
           </Text>
         </View>
       ) : null}
@@ -561,11 +581,7 @@ export default function TrackingScreen() {
             <View style={[styles.pin, styles.pinStart]} />
             <View style={[styles.pin, styles.pinEnd]} />
             <View style={styles.riderBadge}>
-              <FoodArtwork
-                accent={order.accent}
-                icon={stageIcon}
-                size={78}
-              />
+              <FoodArtwork accent={order.accent} icon={stageIcon} size={78} />
             </View>
           </View>
         )}
@@ -585,8 +601,12 @@ export default function TrackingScreen() {
               <Ionicons name="time-outline" size={16} color="#24314A" />
             </View>
             <View style={styles.mapFloatingCopy}>
-              <Text style={styles.mapFloatingTitle}>{liveRouteMetrics!.etaLabel}</Text>
-              <Text style={styles.mapFloatingText}>{liveRouteMetrics!.distanceLabel} to your door</Text>
+              <Text style={styles.mapFloatingTitle}>
+                {liveRouteMetrics!.etaLabel}
+              </Text>
+              <Text style={styles.mapFloatingText}>
+                {liveRouteMetrics!.distanceLabel} to your door
+              </Text>
             </View>
           </View>
         ) : null}
@@ -617,7 +637,8 @@ export default function TrackingScreen() {
                   {liveRouteMetrics?.etaLabel ?? "Live rider route active"}
                 </Text>
                 <Text style={styles.liveRouteText}>
-                  {order.riderName || "Your rider"} is heading to your delivery location by{" "}
+                  {order.riderName || "Your rider"} is heading to your delivery
+                  location by{" "}
                   {order.deliveryTransportMode === "motorbike"
                     ? "motorbike"
                     : order.deliveryTransportMode === "car"
@@ -649,9 +670,13 @@ export default function TrackingScreen() {
             <View style={styles.prepHeader}>
               <View style={styles.prepIconWrap}>
                 <Ionicons
-                  name={prepProgress.delayed ? "time-outline" : "restaurant-outline"}
+                  name={
+                    prepProgress.delayed ? "time-outline" : "restaurant-outline"
+                  }
                   size={18}
-                  color={prepProgress.delayed ? "#9B5D00" : theme.colors.primary}
+                  color={
+                    prepProgress.delayed ? "#9B5D00" : theme.colors.primary
+                  }
                 />
               </View>
               <View style={styles.prepCopy}>
@@ -1144,4 +1169,3 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
   },
 });
-

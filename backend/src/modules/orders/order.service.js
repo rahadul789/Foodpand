@@ -4,12 +4,20 @@ const { AppError } = require("../../common/utils/app-error");
 const { Restaurant } = require("../restaurants/restaurant.model");
 const { User } = require("../users/user.model");
 const { Order } = require("./order.model");
-const { buildPricingBreakdown } = require("./order-pricing.service");
+const {
+  buildPricingBreakdown,
+  normalizeLineItemsWithPricing,
+} = require("./order-pricing.service");
 const {
   emitCustomerOrderChanged,
   emitDeliveryOrdersChanged,
   emitOwnerOrderChanged,
 } = require("../../realtime/socket");
+const {
+  notifyCustomerForOrder,
+  notifyDeliveryPartnersForOrder,
+  notifyOwnerForOrder,
+} = require("../notifications/notification.service");
 
 const ACTIVE_STATUSES = [
   "Pending acceptance",
@@ -18,6 +26,9 @@ const ACTIVE_STATUSES = [
   "On the way",
 ];
 const HISTORY_STATUSES = ["Delivered", "Cancelled"];
+const DELIVERY_DISPATCH_WINDOW_MS = 20 * 1000;
+const DELIVERY_DISPATCH_BATCH_SIZE = 5;
+const dispatchRoundTimers = new Map();
 const ORDER_STATUSES = [
   "Pending acceptance",
   "Preparing",
@@ -224,6 +235,71 @@ function validateObjectId(value, message) {
   }
 }
 
+function clearDispatchRoundTimer(orderId) {
+  const existing = dispatchRoundTimers.get(String(orderId));
+
+  if (existing) {
+    clearTimeout(existing);
+    dispatchRoundTimers.delete(String(orderId));
+  }
+}
+
+function getDispatchRestaurantLocation(restaurant) {
+  const [longitude, latitude] = restaurant?.location?.coordinates ?? [];
+
+  if (
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    (latitude !== 0 || longitude !== 0)
+  ) {
+    return { latitude, longitude };
+  }
+
+  return null;
+}
+
+function getRiderDispatchLocation(rider) {
+  const [deviceLongitude, deviceLatitude] =
+    rider.currentDeviceLocation?.location?.coordinates ?? [];
+
+  if (
+    Number.isFinite(deviceLatitude) &&
+    Number.isFinite(deviceLongitude) &&
+    (deviceLatitude !== 0 || deviceLongitude !== 0)
+  ) {
+    return { latitude: deviceLatitude, longitude: deviceLongitude };
+  }
+
+  if (
+    Number.isFinite(rider.liveDeliveryLocation?.latitude) &&
+    Number.isFinite(rider.liveDeliveryLocation?.longitude)
+  ) {
+    return {
+      latitude: rider.liveDeliveryLocation.latitude,
+      longitude: rider.liveDeliveryLocation.longitude,
+    };
+  }
+
+  return null;
+}
+
+function haversineMeters(from, to) {
+  const toRadians = (value) => (value * Math.PI) / 180;
+  const earthRadius = 6371e3;
+  const dLat = toRadians(to.latitude - from.latitude);
+  const dLng = toRadians(to.longitude - from.longitude);
+  const startLat = toRadians(from.latitude);
+  const endLat = toRadians(to.latitude);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(startLat) *
+      Math.cos(endLat) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+
+  return 2 * earthRadius * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 function mapOrder(order) {
   const fallbackOrderCode =
     order.orderCode || `FD-${String(order._id).slice(-8).toUpperCase()}`;
@@ -256,8 +332,17 @@ function mapOrder(order) {
       quantity: item.quantity,
       unitTk: item.unitTk,
       summary: item.summary || undefined,
+      configuration: item.configuration
+        ? {
+            selectedOptions: item.configuration.selectedOptions ?? [],
+            selectedAddons: item.configuration.selectedAddons ?? [],
+            selectedBundleSuggestionIds:
+              item.configuration.selectedBundleSuggestionIds ?? [],
+          }
+        : undefined,
     })),
     paymentMethod: order.paymentMethod,
+    userId: String(order.userId),
     placedAt: order.placedAt.toISOString(),
     deliveryAddress: order.deliveryAddress,
     deliveryLocation: order.deliveryLocation
@@ -298,6 +383,14 @@ function mapOrder(order) {
     restaurantAcceptedAt: order.restaurantAcceptedAt?.toISOString(),
     readyForPickupAt: order.readyForPickupAt?.toISOString(),
     deliveryAcceptedAt: order.deliveryAcceptedAt?.toISOString(),
+    deliveryDispatchRound:
+      typeof order.deliveryDispatchRound === "number"
+        ? order.deliveryDispatchRound
+        : 0,
+    deliveryDispatchWindowExpiresAt:
+      order.deliveryDispatchWindowExpiresAt?.toISOString(),
+    deliveryDispatchExhaustedAt:
+      order.deliveryDispatchExhaustedAt?.toISOString(),
     pickedUpAt: order.pickedUpAt?.toISOString(),
     deliveredAt: order.deliveredAt?.toISOString(),
     statusHistory: (order.statusHistory ?? []).map((entry) => ({
@@ -307,42 +400,6 @@ function mapOrder(order) {
       createdAt: entry.createdAt.toISOString(),
     })),
   };
-}
-
-function normalizeLineItems(items, restaurant) {
-  if (!Array.isArray(items) || items.length === 0) {
-    throw new AppError("Add at least one item before placing the order", 400);
-  }
-
-  const menuMap = new Map(
-    (restaurant.menuItems ?? []).map((item) => [item.key, item]),
-  );
-
-  return items.map((item) => {
-    const quantity = Number(item.quantity);
-    const unitTk = Number(item.unitTk);
-    const restaurantMenuItem = menuMap.get(item.itemId);
-
-    if (!restaurantMenuItem) {
-      throw new AppError("One or more selected items are unavailable", 400);
-    }
-
-    if (!Number.isFinite(quantity) || quantity < 1) {
-      throw new AppError("Item quantity must be at least 1", 400);
-    }
-
-    if (!Number.isFinite(unitTk) || unitTk < 0) {
-      throw new AppError("Invalid item price detected", 400);
-    }
-
-    return {
-      itemId: restaurantMenuItem.key,
-      name: restaurantMenuItem.name,
-      quantity,
-      unitTk,
-      summary: item.summary?.trim() || "",
-    };
-  });
 }
 
 function normalizeMoney(value, label) {
@@ -363,7 +420,7 @@ async function getRestaurantSnapshot(restaurantId) {
     isActive: true,
   })
     .select(
-      "_id ownerId name accent icon coverImage deliveryTime menuItems offers isActive",
+      "_id ownerId name accent icon coverImage deliveryTime menuItems offers isActive location",
     )
     .lean();
 
@@ -372,6 +429,176 @@ async function getRestaurantSnapshot(restaurantId) {
   }
 
   return restaurant;
+}
+
+async function getDeliveryDispatchCandidatesForOrder(order) {
+  const restaurant = await Restaurant.findById(order.restaurantId)
+    .select("location")
+    .lean();
+
+  const restaurantLocation = getDispatchRestaurantLocation(restaurant);
+  const excludedIds = (order.deliveryDispatchNotifiedPartnerIds ?? []).map(String);
+
+  const riders = await User.find({
+    role: "delivery_partner",
+    isActive: true,
+    "deliveryAvailability.isOnline": true,
+    "deliveryAvailability.acceptsNewOrders": { $ne: false },
+    _id: excludedIds.length
+      ? {
+          $nin: excludedIds,
+        }
+      : { $exists: true },
+    "pushTokens.appId": "delivery-app",
+  })
+    .select(
+      "_id currentDeviceLocation liveDeliveryLocation deliveryAvailability pushTokens",
+    )
+    .lean();
+
+  if (!riders.length) {
+    return [];
+  }
+
+  const activeCounts = await Order.aggregate([
+    {
+      $match: {
+        deliveryPartnerId: {
+          $in: riders.map((rider) => rider._id),
+        },
+        status: {
+          $in: ["Ready for pickup", "On the way"],
+        },
+      },
+    },
+    {
+      $group: {
+        _id: "$deliveryPartnerId",
+        assignedCount: { $sum: 1 },
+        liveCount: {
+          $sum: {
+            $cond: [{ $eq: ["$status", "On the way"] }, 1, 0],
+          },
+        },
+      },
+    },
+  ]);
+
+  const countMap = new Map(
+    activeCounts.map((entry) => [
+      String(entry._id),
+      {
+        assignedCount: entry.assignedCount || 0,
+        liveCount: entry.liveCount || 0,
+      },
+    ]),
+  );
+
+  return riders
+    .map((rider) => {
+      const counts = countMap.get(String(rider._id)) ?? {
+        assignedCount: 0,
+        liveCount: 0,
+      };
+      const riderLocation = getRiderDispatchLocation(rider);
+
+      return {
+        riderId: String(rider._id),
+        liveCount: counts.liveCount,
+        assignedCount: counts.assignedCount,
+        distanceMeters:
+          riderLocation && restaurantLocation
+            ? haversineMeters(riderLocation, restaurantLocation)
+            : Number.POSITIVE_INFINITY,
+      };
+    })
+    .sort((left, right) => {
+      if (left.liveCount !== right.liveCount) {
+        return left.liveCount - right.liveCount;
+      }
+
+      if (left.assignedCount !== right.assignedCount) {
+        return left.assignedCount - right.assignedCount;
+      }
+
+      return left.distanceMeters - right.distanceMeters;
+    })
+    .slice(0, DELIVERY_DISPATCH_BATCH_SIZE)
+    .map((entry) => entry.riderId);
+}
+
+async function startNextDeliveryDispatchRound(order) {
+  clearDispatchRoundTimer(order._id);
+
+  if (order.status !== "Ready for pickup" || order.deliveryPartnerId) {
+    return mapOrder(order.toObject());
+  }
+
+  const nextRiderIds = await getDeliveryDispatchCandidatesForOrder(order);
+
+  if (!nextRiderIds.length) {
+    order.deliveryDispatchExhaustedAt = order.deliveryDispatchExhaustedAt || new Date();
+    order.deliveryDispatchWindowExpiresAt = null;
+    await order.save();
+    return mapOrder(order.toObject());
+  }
+
+  order.deliveryDispatchRound = (order.deliveryDispatchRound || 0) + 1;
+  order.deliveryDispatchWindowExpiresAt = new Date(
+    Date.now() + DELIVERY_DISPATCH_WINDOW_MS,
+  );
+  order.deliveryDispatchExhaustedAt = null;
+  order.deliveryDispatchNotifiedPartnerIds = [
+    ...(order.deliveryDispatchNotifiedPartnerIds ?? []),
+    ...nextRiderIds.map((id) => new Types.ObjectId(id)),
+  ];
+  await order.save();
+
+  const mappedOrder = mapOrder(order.toObject());
+  await notifyDeliveryPartnersForOrder(mappedOrder, {
+    targetUserIds: nextRiderIds,
+  });
+  const timer = setTimeout(async () => {
+    try {
+      const freshOrder = await Order.findById(order._id);
+
+      if (!freshOrder) {
+        clearDispatchRoundTimer(order._id);
+        return;
+      }
+
+      if (
+        freshOrder.status !== "Ready for pickup" ||
+        freshOrder.deliveryPartnerId ||
+        !freshOrder.deliveryDispatchWindowExpiresAt ||
+        freshOrder.deliveryDispatchWindowExpiresAt.getTime() > Date.now()
+      ) {
+        return;
+      }
+
+      await startNextDeliveryDispatchRound(freshOrder);
+    } catch (error) {
+      console.error("[dispatch] auto-advance failed", error);
+    }
+  }, DELIVERY_DISPATCH_WINDOW_MS + 250);
+  dispatchRoundTimers.set(String(order._id), timer);
+
+  return mappedOrder;
+}
+
+async function advanceExpiredDeliveryDispatchRounds() {
+  const expiredOrders = await Order.find({
+    status: "Ready for pickup",
+    deliveryPartnerId: null,
+    deliveryDispatchWindowExpiresAt: {
+      $ne: null,
+      $lte: new Date(),
+    },
+  }).sort({ readyForPickupAt: 1 });
+
+  for (const order of expiredOrders) {
+    await startNextDeliveryDispatchRound(order);
+  }
 }
 
 function assertOwnerCanAccessOrder(userId, order) {
@@ -389,7 +616,7 @@ function assertDeliveryPartnerCanAccessOrder(userId, order) {
 async function createOrder(userId, payload) {
   const restaurant = await getRestaurantSnapshot(payload.restaurantId);
   const pendingPresentation = getStatusPresentation("Pending acceptance", restaurant);
-  const lineItems = normalizeLineItems(payload.items, restaurant);
+  const lineItems = normalizeLineItemsWithPricing(payload.items, restaurant);
   const paymentMethod = payload.paymentMethod === "bkash" ? "bKash" : "COD";
   const deliveryAddress = payload.deliveryAddress?.trim();
   const deliveryLocation = normalizeDeliveryLocation(payload.deliveryLocation);
@@ -455,19 +682,21 @@ async function createOrder(userId, payload) {
       type: "created",
       order: mappedOrder,
     });
+    void notifyOwnerForOrder(String(order.restaurantOwnerId), mappedOrder, "created");
   }
 
   emitCustomerOrderChanged(String(userId), {
     type: "created",
     order: mappedOrder,
   });
+  void notifyCustomerForOrder(mappedOrder, "created");
 
   return mappedOrder;
 }
 
 async function getOrderQuote(payload) {
   const restaurant = await getRestaurantSnapshot(payload.restaurantId);
-  const lineItems = normalizeLineItems(payload.items, restaurant);
+  const lineItems = normalizeLineItemsWithPricing(payload.items, restaurant);
 
   return buildPricingBreakdown({
     restaurant,
@@ -487,10 +716,25 @@ async function listRestaurantOwnerOrders(ownerUserId) {
   return orders.map(mapOrder);
 }
 
-async function listAvailableDeliveryOrders() {
+async function listAvailableDeliveryOrders(deliveryPartnerId) {
+  await advanceExpiredDeliveryDispatchRounds();
+
   const orders = await Order.find({
     status: "Ready for pickup",
     deliveryPartnerId: null,
+    $or: [
+      {
+        deliveryDispatchWindowExpiresAt: {
+          $gt: new Date(),
+        },
+        deliveryDispatchNotifiedPartnerIds: deliveryPartnerId,
+      },
+      {
+        deliveryDispatchExhaustedAt: {
+          $ne: null,
+        },
+      },
+    ],
   })
     .sort({ readyForPickupAt: -1, placedAt: -1 })
     .lean();
@@ -574,6 +818,7 @@ async function cancelOrder(userId, orderId) {
     createdAt: new Date(),
   });
   await order.save();
+  clearDispatchRoundTimer(order._id);
   const mappedOrder = mapOrder(order.toObject());
 
   if (order.restaurantOwnerId) {
@@ -581,12 +826,14 @@ async function cancelOrder(userId, orderId) {
       type: "cancelled",
       order: mappedOrder,
     });
+    void notifyOwnerForOrder(String(order.restaurantOwnerId), mappedOrder, "cancelled");
   }
 
   emitCustomerOrderChanged(String(userId), {
     type: "cancelled",
     order: mappedOrder,
   });
+  void notifyCustomerForOrder(mappedOrder, "cancelled");
 
   return mappedOrder;
 }
@@ -618,6 +865,9 @@ async function assignDeliveryPartner(actorUser, orderId) {
   order.deliveryAcceptedAt = order.deliveryAcceptedAt ?? new Date();
   order.riderName = actorUser.name?.trim() || "Delivery partner";
   order.deliveryTransportMode = actorUser.deliveryTransportMode || "bicycle";
+  order.deliveryDispatchWindowExpiresAt = null;
+  order.deliveryDispatchNotifiedPartnerIds = [];
+  order.deliveryDispatchExhaustedAt = null;
   order.statusHistory.push({
     status: order.status,
     actorRole: "delivery_partner",
@@ -626,6 +876,7 @@ async function assignDeliveryPartner(actorUser, orderId) {
   });
 
   await order.save();
+  clearDispatchRoundTimer(order._id);
   const mappedOrder = mapOrder(order.toObject());
 
   if (order.restaurantOwnerId) {
@@ -633,6 +884,11 @@ async function assignDeliveryPartner(actorUser, orderId) {
       type: "delivery_assigned",
       order: mappedOrder,
     });
+    void notifyOwnerForOrder(
+      String(order.restaurantOwnerId),
+      mappedOrder,
+      "delivery_assigned",
+    );
   }
 
   emitDeliveryOrdersChanged(String(actorUser._id), {
@@ -644,6 +900,7 @@ async function assignDeliveryPartner(actorUser, orderId) {
     type: "delivery_assigned",
     order: mappedOrder,
   });
+  void notifyCustomerForOrder(mappedOrder, "delivery_assigned");
 
   return mappedOrder;
 }
@@ -733,6 +990,10 @@ async function updateOrderStatus(actorUser, orderId, payload) {
   if (status === "Ready for pickup") {
     order.readyForPickupAt = new Date();
     order.estimatedReadyAt = null;
+    order.deliveryDispatchRound = 0;
+    order.deliveryDispatchWindowExpiresAt = null;
+    order.deliveryDispatchNotifiedPartnerIds = [];
+    order.deliveryDispatchExhaustedAt = null;
   }
 
   if (status === "On the way") {
@@ -756,6 +1017,9 @@ async function updateOrderStatus(actorUser, orderId, payload) {
   });
 
   await order.save();
+  if (status !== "Ready for pickup") {
+    clearDispatchRoundTimer(order._id);
+  }
   const mappedOrder = mapOrder(order.toObject());
 
   if (order.restaurantOwnerId) {
@@ -763,6 +1027,7 @@ async function updateOrderStatus(actorUser, orderId, payload) {
       type: "status_updated",
       order: mappedOrder,
     });
+    void notifyOwnerForOrder(String(order.restaurantOwnerId), mappedOrder, "status");
   }
 
   if (order.deliveryPartnerId) {
@@ -776,6 +1041,10 @@ async function updateOrderStatus(actorUser, orderId, payload) {
     type: "status_updated",
     order: mappedOrder,
   });
+  void notifyCustomerForOrder(mappedOrder, "status");
+  if (status === "Ready for pickup") {
+    return startNextDeliveryDispatchRound(order);
+  }
 
   return mappedOrder;
 }
@@ -832,6 +1101,11 @@ async function updatePreparationWindow(actorUser, orderId, payload) {
       type: "prep_window_updated",
       order: mappedOrder,
     });
+    void notifyOwnerForOrder(
+      String(order.restaurantOwnerId),
+      mappedOrder,
+      "prep_window_updated",
+    );
   }
 
   if (order.deliveryPartnerId) {
@@ -845,6 +1119,7 @@ async function updatePreparationWindow(actorUser, orderId, payload) {
     type: "prep_window_updated",
     order: mappedOrder,
   });
+  void notifyCustomerForOrder(mappedOrder, "prep_window_updated");
 
   return mappedOrder;
 }

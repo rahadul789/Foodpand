@@ -476,7 +476,7 @@ export default function CartScreen() {
                     <Ionicons name={item.icon as never} size={30} color="#20263A" />
                   </View>
                   <Text style={styles.suggestionName}>{item.name}</Text>
-                  <Text style={styles.suggestionPrice}>TK {Math.round(item.price * 10)}</Text>
+                  <Text style={styles.suggestionPrice}>TK {Math.round(item.price)}</Text>
                   <Pressable
                     style={styles.suggestionAdd}
                     onPress={() => {
@@ -484,7 +484,12 @@ export default function CartScreen() {
                       addItem({
                         restaurant,
                         item,
-                        unitTk: Math.round(item.price * 10),
+                        unitTk: Math.round(item.price),
+                        configuration: {
+                          selectedOptions: [],
+                          selectedAddons: [],
+                          selectedBundleSuggestionIds: [],
+                        },
                       });
                     }}
                   >

@@ -65,8 +65,8 @@ export function apiPatch<T>(path: string, body?: unknown, token?: string | null)
   return request<T>(path, { method: "PATCH", body, token });
 }
 
-export function apiDelete<T>(path: string, token?: string | null) {
-  return request<T>(path, { method: "DELETE", token });
+export function apiDelete<T>(path: string, body?: unknown, token?: string | null) {
+  return request<T>(path, { method: "DELETE", body, token });
 }
 
 export function setApiAccessToken(token: string | null) {

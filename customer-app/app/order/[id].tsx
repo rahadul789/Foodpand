@@ -243,6 +243,7 @@ export default function OrderDetailsScreen() {
           quantity: lineItem.quantity,
           unitTk: lineItem.unitTk,
           summary: lineItem.summary,
+          configuration: lineItem.configuration,
           cartKey: `${order.id}-${lineItem.itemId}-${index}`,
         };
       })

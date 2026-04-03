@@ -30,6 +30,9 @@ export type DeliveryOrder = {
   prepareMaxMinutes?: number;
   estimatedReadyAt?: string;
   deliveryAcceptedAt?: string;
+  deliveryDispatchRound?: number;
+  deliveryDispatchWindowExpiresAt?: string;
+  deliveryDispatchExhaustedAt?: string;
   deliveryLiveLocation?: {
     latitude: number;
     longitude: number;

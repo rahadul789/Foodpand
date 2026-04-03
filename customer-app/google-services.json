@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "805027505850",
+    "project_id": "foodpand-dea66",
+    "storage_bucket": "foodpand-dea66.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:805027505850:android:223b457274c6ce08370483",
+        "android_client_info": {
+          "package_name": "com.foodpand.customer"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyASrzj-BJPZxN2_Ydm-6Q98JLImeqDIH30"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

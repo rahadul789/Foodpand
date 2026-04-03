@@ -73,6 +73,18 @@ export function OffersPage() {
     () => (offersData?.offers ?? []).slice().sort((left, right) => left.title.localeCompare(right.title)),
     [offersData?.offers],
   );
+  const activeOfferCount = useMemo(
+    () => offers.filter((offer) => offer.isActive !== false).length,
+    [offers],
+  );
+  const autoApplyCount = useMemo(
+    () => offers.filter((offer) => offer.isAutoApply).length,
+    [offers],
+  );
+  const codeOfferCount = useMemo(
+    () => offers.filter((offer) => Boolean(offer.code)).length,
+    [offers],
+  );
 
   const isMutating =
     createOffer.isPending ||
@@ -151,6 +163,21 @@ export function OffersPage() {
             now owner-managed. Advanced item/category targeting can come in the next pass.
           </p>
         </div>
+      </section>
+
+      <section className="stats-grid stats-grid-compact">
+        <article className="stat-card">
+          <span className="stat-label">Active campaigns</span>
+          <strong className="stat-value stat-value-compact">{activeOfferCount}</strong>
+        </article>
+        <article className="stat-card">
+          <span className="stat-label">Auto-apply offers</span>
+          <strong className="stat-value stat-value-compact">{autoApplyCount}</strong>
+        </article>
+        <article className="stat-card">
+          <span className="stat-label">Code-based promos</span>
+          <strong className="stat-value stat-value-compact">{codeOfferCount}</strong>
+        </article>
       </section>
 
       {error ? (

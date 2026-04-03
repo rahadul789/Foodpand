@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "801410247728",
+    "project_id": "foodpand-delivery",
+    "storage_bucket": "foodpand-delivery.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:801410247728:android:4c7c309e0a3306035691f5",
+        "android_client_info": {
+          "package_name": "com.haqrahadul.deliveryapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC_Fxe2l2zSPz84XJF5QZ7qJkAoipqGVPI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

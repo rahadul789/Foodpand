@@ -3,14 +3,21 @@ import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import * as Notifications from "expo-notifications";
+import * as SecureStore from "expo-secure-store";
 
 import { GuideBuddyOverlay } from "@/components/guide-buddy";
 import { useAddressesQuery } from "@/lib/address-queries";
 import { useAuthStore } from "@/lib/auth-store";
 import { useCartStore } from "@/lib/cart-store";
 import { resetGuestLocations, syncLocationsFromBackend } from "@/lib/location-store";
+import { syncNotificationCaches } from "@/lib/notification-queries";
+import { decorateNotification } from "@/lib/notification-store";
+import { syncPushTokenWithBackend } from "@/lib/push-notifications";
 import { queryClient } from "@/lib/query-client";
 import { useUIStore } from "@/lib/ui-store";
+
+const PUSH_TOKEN_KEY = "customer-app-push-token";
 
 function GlobalToast() {
   const visible = useUIStore((state) => state.visible);
@@ -136,6 +143,107 @@ function AuthBootstrap() {
   return null;
 }
 
+function PushNotificationsBootstrap() {
+  const router = useRouter();
+  const user = useAuthStore((state) => state.user);
+  const userId = user?.id ?? null;
+  const accessToken = useAuthStore((state) => state.accessToken);
+  const hasHydrated = useAuthStore((state) => state.hasHydrated);
+
+  useEffect(() => {
+    if (!hasHydrated || !user || !accessToken) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const syncToken = async () => {
+      try {
+        const token = await syncPushTokenWithBackend(accessToken);
+
+        if (!cancelled && token) {
+          await SecureStore.setItemAsync(PUSH_TOKEN_KEY, token);
+        }
+      } catch {
+        // Silent for now; push registration should not block app usage.
+      }
+    };
+
+    void syncToken();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, hasHydrated, user]);
+
+  useEffect(() => {
+    const receivedSubscription = Notifications.addNotificationReceivedListener(
+      (notification) => {
+        if (!userId) {
+          return;
+        }
+
+        syncNotificationCaches(
+          queryClient,
+          userId,
+          decorateNotification({
+            id:
+              typeof notification.request.content.data?.notificationId === "string"
+                ? notification.request.content.data.notificationId
+                : `notif-${Date.now()}`,
+            category:
+              (notification.request.content.data?.category as
+                | "orders"
+              | "offers"
+              | "payments"
+                | "account"
+                | "support"
+                | undefined) ?? "orders",
+            title: notification.request.content.title ?? "New update",
+            body: notification.request.content.body ?? "You have a new notification.",
+            unread: true,
+            target:
+              typeof notification.request.content.data?.target === "string"
+                ? notification.request.content.data.target
+                : "notifications",
+            targetOrderId:
+              typeof notification.request.content.data?.orderId === "string"
+                ? notification.request.content.data.orderId
+                : undefined,
+            createdAt: new Date().toISOString(),
+            readAt: undefined,
+          }),
+        );
+      },
+    );
+
+    const responseSubscription =
+      Notifications.addNotificationResponseReceivedListener((response) => {
+        const data = response.notification.request.content.data;
+        const orderId =
+          typeof data?.orderId === "string" ? data.orderId : undefined;
+        const target =
+          typeof data?.target === "string" ? data.target : undefined;
+
+        if (orderId) {
+          router.push(`/order/${orderId}`);
+          return;
+        }
+
+        if (target === "notifications") {
+          router.push("/notifications");
+        }
+      });
+
+    return () => {
+      receivedSubscription.remove();
+      responseSubscription.remove();
+    };
+  }, [router, userId]);
+
+  return null;
+}
+
 export default function RootLayout() {
   const hasHydrated = useAuthStore((state) => state.hasHydrated);
 
@@ -152,6 +260,7 @@ export default function RootLayout() {
         }}
       />
       <LocationSyncGate />
+      <PushNotificationsBootstrap />
       <GuideBuddyOverlay />
       <GlobalCartSwitchModal />
       <GlobalToast />
