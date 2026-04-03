@@ -7,10 +7,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useAuthStore } from "@/lib/auth-store";
 import {
-  getUnreadNotificationCount,
   type AppNotificationCategory,
-  useNotificationStore,
 } from "@/lib/notification-store";
+import {
+  useMarkAllNotificationsAsReadMutation,
+  useMarkNotificationAsReadMutation,
+  useNotificationsQuery,
+} from "@/lib/notification-queries";
 
 type NotificationFilter = "all" | "unread" | AppNotificationCategory;
 
@@ -27,15 +30,14 @@ const filters: { id: NotificationFilter; label: string }[] = [
 export default function NotificationsScreen() {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
-  const notifications = useNotificationStore((state) => state.notifications);
-  const markAsRead = useNotificationStore((state) => state.markAsRead);
-  const markAllAsRead = useNotificationStore((state) => state.markAllAsRead);
+  const { data, isLoading } = useNotificationsQuery(user?.id ?? null, Boolean(user?.id));
+  const unreadCount = data?.unreadCount ?? 0;
+  const markAsReadMutation = useMarkNotificationAsReadMutation();
+  const markAllAsReadMutation = useMarkAllNotificationsAsReadMutation();
   const [selectedFilter, setSelectedFilter] = useState<NotificationFilter>("all");
 
-  const unreadCount = getUnreadNotificationCount(notifications);
-
   const filteredNotifications = useMemo(() => {
-    return notifications.filter((notification) => {
+    return (data?.notifications ?? []).filter((notification) => {
       if (selectedFilter === "all") {
         return true;
       }
@@ -46,13 +48,22 @@ export default function NotificationsScreen() {
 
       return notification.category === selectedFilter;
     });
-  }, [notifications, selectedFilter]);
+  }, [data?.notifications, selectedFilter]);
 
   const handleOpenNotification = (
     id: string,
     category: AppNotificationCategory,
+    target?: string,
+    targetOrderId?: string,
   ) => {
-    markAsRead(id);
+    if (!markAsReadMutation.isPending) {
+      void markAsReadMutation.mutateAsync(id);
+    }
+
+    if (target === "order" && targetOrderId) {
+      router.push(`/order/${targetOrderId}`);
+      return;
+    }
 
     if (category === "orders") {
       router.push("/(tabs)/orders");
@@ -120,7 +131,7 @@ export default function NotificationsScreen() {
           <Text style={styles.topTitle}>Notifications</Text>
           <Pressable
             style={styles.markAllButton}
-            onPress={markAllAsRead}
+            onPress={() => void markAllAsReadMutation.mutateAsync()}
           >
             <Text style={styles.markAllButtonText}>Mark all</Text>
           </Pressable>
@@ -171,7 +182,20 @@ export default function NotificationsScreen() {
           })}
         </ScrollView>
 
-        {filteredNotifications.length === 0 ? (
+        {isLoading ? (
+          <View style={styles.list}>
+            {[0, 1, 2].map((item) => (
+              <View key={item} style={styles.skeletonCard}>
+                <View style={styles.skeletonIcon} />
+                <View style={styles.skeletonCopy}>
+                  <View style={styles.skeletonTitle} />
+                  <View style={styles.skeletonBody} />
+                  <View style={styles.skeletonBodyShort} />
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : filteredNotifications.length === 0 ? (
           <View style={styles.emptyCard}>
             <View style={styles.emptyIconWrap}>
               <Ionicons name="notifications-off-outline" size={26} color="#24314A" />
@@ -191,7 +215,12 @@ export default function NotificationsScreen() {
                   notification.unread && styles.cardUnread,
                 ]}
                 onPress={() =>
-                  handleOpenNotification(notification.id, notification.category)
+                  handleOpenNotification(
+                    notification.id,
+                    notification.category,
+                    notification.target,
+                    notification.targetOrderId,
+                  )
                 }
               >
                 <View
@@ -356,6 +385,42 @@ const styles = StyleSheet.create({
   },
   list: {
     gap: 12,
+  },
+  skeletonCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    padding: 16,
+    borderRadius: 24,
+    backgroundColor: "#FFFFFF",
+  },
+  skeletonIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
+    backgroundColor: "#F2EBE4",
+  },
+  skeletonCopy: {
+    flex: 1,
+    gap: 8,
+  },
+  skeletonTitle: {
+    width: "58%",
+    height: 16,
+    borderRadius: 999,
+    backgroundColor: "#EFE7DE",
+  },
+  skeletonBody: {
+    width: "96%",
+    height: 12,
+    borderRadius: 999,
+    backgroundColor: "#F3ECE5",
+  },
+  skeletonBodyShort: {
+    width: "64%",
+    height: 12,
+    borderRadius: 999,
+    backgroundColor: "#F3ECE5",
   },
   card: {
     flexDirection: "row",

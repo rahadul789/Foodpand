@@ -12,6 +12,13 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.foodpand.customer",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyAaLg2PH5UpMb2ME_xrB5jJrETBbEBGWOA"
+        }
+      },
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -19,7 +26,11 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "output": "static",
@@ -27,6 +38,7 @@
     },
     "plugins": [
       "expo-router",
+      "expo-notifications",
       [
         "expo-location",
         {
@@ -49,6 +61,13 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "51ec5df9-5aa4-4d48-9e67-9891c2dd3830"
+      }
+    },
+    "owner": "haqrahadul"
   }
 }

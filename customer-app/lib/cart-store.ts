@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import type {
+  ItemConfiguration,
   MenuItem,
   Restaurant,
   RestaurantThresholdOffer,
@@ -18,6 +19,7 @@ type CartItem = {
   quantity: number;
   unitTk: number;
   summary?: string;
+  configuration?: ItemConfiguration;
 };
 
 type CouponCode = "YUMMELA" | "FREEDEL";
@@ -29,6 +31,7 @@ type AddItemParams = {
   item: MenuItem;
   unitTk: number;
   summary?: string;
+  configuration?: ItemConfiguration;
   quantity?: number;
   cartKey?: string;
 };
@@ -175,6 +178,7 @@ function buildCartEntryState(
         quantity: (existing?.quantity ?? 0) + (params.quantity ?? 1),
         unitTk: params.unitTk,
         summary: params.summary ?? existing?.summary,
+        configuration: params.configuration ?? existing?.configuration,
       },
     },
   };
@@ -196,6 +200,7 @@ function buildCartStateFromEntries(params: ReplaceCartParams) {
       quantity: (existing?.quantity ?? 0) + (entry.quantity ?? 1),
       unitTk: entry.unitTk,
       summary: entry.summary ?? existing?.summary,
+      configuration: entry.configuration ?? existing?.configuration,
     };
 
     return acc;

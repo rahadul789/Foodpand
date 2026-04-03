@@ -148,6 +148,18 @@ export type MenuItemDetail = {
   maxInstructionsLength?: number;
 };
 
+export type ItemConfiguration = {
+  selectedOptions?: Array<{
+    groupId: string;
+    choiceId: string;
+  }>;
+  selectedAddons?: Array<{
+    groupId: string;
+    itemIds: string[];
+  }>;
+  selectedBundleSuggestionIds?: string[];
+};
+
 export type Order = {
   id: string;
   orderCode?: string;
@@ -187,6 +199,7 @@ export type Order = {
     quantity: number;
     unitTk: number;
     summary?: string;
+    configuration?: ItemConfiguration;
   }>;
   paymentMethod: "COD" | "bKash";
   placedAt: string;

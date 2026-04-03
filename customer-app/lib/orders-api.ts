@@ -1,5 +1,5 @@
 import { apiGet, apiPatch, apiPost } from "@/lib/api-client";
-import type { Order } from "@/lib/customer-data";
+import type { ItemConfiguration, Order } from "@/lib/customer-data";
 import type { PaymentMethodId } from "@/lib/payment-store";
 
 type OrderDto = {
@@ -35,6 +35,7 @@ type OrderDto = {
     quantity: number;
     unitTk: number;
     summary?: string;
+    configuration?: ItemConfiguration;
   }>;
   paymentMethod: Order["paymentMethod"];
   placedAt: string;
@@ -79,6 +80,7 @@ export type CreateOrderPayload = {
     quantity: number;
     unitTk: number;
     summary?: string;
+    configuration?: ItemConfiguration;
   }>;
   subtotalTk: number;
   deliveryTk: number;
@@ -180,6 +182,7 @@ export type OrderQuotePayload = {
     quantity: number;
     unitTk: number;
     summary?: string;
+    configuration?: ItemConfiguration;
   }>;
   couponCode?: string | null;
 };

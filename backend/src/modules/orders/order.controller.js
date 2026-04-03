@@ -62,8 +62,8 @@ const listRestaurantOwnerOrdersController = asyncHandler(async (req, res) => {
   });
 });
 
-const listAvailableDeliveryOrdersController = asyncHandler(async (_req, res) => {
-  const data = await listAvailableDeliveryOrders();
+const listAvailableDeliveryOrdersController = asyncHandler(async (req, res) => {
+  const data = await listAvailableDeliveryOrders(req.auth.userId);
 
   return sendResponse(res, {
     message: "Available delivery orders fetched successfully",

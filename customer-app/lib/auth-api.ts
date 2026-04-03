@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from "@/lib/api-client";
+import { apiDelete, apiGet, apiPost } from "@/lib/api-client";
 
 type AuthUserDto = {
   id: string;
@@ -39,5 +39,30 @@ export async function signupRequest(payload: SignupPayload) {
 
 export async function getMeRequest(token?: string | null) {
   const response = await apiGet<AuthUserDto>("/api/v1/users/me", token);
+  return response.data;
+}
+
+export async function registerPushTokenRequest(
+  payload: { token: string; platform: "android" | "ios"; appId: string },
+  token?: string | null,
+) {
+  const response = await apiPost<{ registered: boolean }>(
+    "/api/v1/users/push-token",
+    payload,
+    token,
+  );
+  return response.data;
+}
+
+export async function unregisterPushTokenRequest(
+  payload: { token: string; appId: string },
+  token?: string | null,
+) {
+  const response = await apiDelete<{ removed: boolean }>(
+    "/api/v1/users/push-token",
+    payload,
+    token,
+  );
+
   return response.data;
 }

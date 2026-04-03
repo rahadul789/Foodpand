@@ -559,9 +559,199 @@ function normalizeMenuItemPayload(payload, existingKey) {
   };
 }
 
+function normalizeChoicePayload(choice, fallbackPrefix) {
+  const label = choice?.label?.trim();
+  const priceModifier = Number(choice?.priceModifier || 0);
+
+  if (!label) {
+    throw new AppError("Each option choice needs a label", 400);
+  }
+
+  if (!Number.isFinite(priceModifier) || priceModifier < 0) {
+    throw new AppError("Option choice price modifier is invalid", 400);
+  }
+
+  return {
+    id: choice?.id?.trim() || toEntityKey(label, fallbackPrefix),
+    label,
+    priceModifier,
+  };
+}
+
+function normalizeOptionGroups(payload) {
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+
+  return payload
+    .map((group, index) => {
+      const title = group?.title?.trim();
+      const minSelect = Number(group?.minSelect ?? 0);
+      const maxSelect = Number(group?.maxSelect ?? 1);
+      const required = Boolean(group?.required);
+
+      if (!title) {
+        throw new AppError("Each option group needs a title", 400);
+      }
+
+      if (!Number.isFinite(minSelect) || minSelect < 0) {
+        throw new AppError("Option group min select is invalid", 400);
+      }
+
+      if (!Number.isFinite(maxSelect) || maxSelect < 1) {
+        throw new AppError("Option group max select is invalid", 400);
+      }
+
+      if (minSelect > maxSelect) {
+        throw new AppError("Option group min select can not exceed max select", 400);
+      }
+
+      const choices = Array.isArray(group?.choices)
+        ? group.choices.map((choice, choiceIndex) =>
+            normalizeChoicePayload(choice, `choice-${index + 1}-${choiceIndex + 1}`),
+          )
+        : [];
+
+      if (!choices.length) {
+        throw new AppError("Each option group needs at least one choice", 400);
+      }
+
+      return {
+        id: group?.id?.trim() || toEntityKey(title, `option-group-${index + 1}`),
+        title,
+        required,
+        minSelect: Math.round(minSelect),
+        maxSelect: Math.round(maxSelect),
+        choices,
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeAddonItems(payload, fallbackPrefix) {
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+
+  return payload.map((item, index) => {
+    const label = item?.label?.trim();
+    const priceModifier = Number(item?.priceModifier || 0);
+
+    if (!label) {
+      throw new AppError("Each add-on item needs a label", 400);
+    }
+
+    if (!Number.isFinite(priceModifier) || priceModifier < 0) {
+      throw new AppError("Add-on item price modifier is invalid", 400);
+    }
+
+    return {
+      id: item?.id?.trim() || toEntityKey(label, `${fallbackPrefix}-${index + 1}`),
+      label,
+      priceModifier,
+      popular: Boolean(item?.popular),
+    };
+  });
+}
+
+function normalizeAddonGroups(payload) {
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+
+  return payload
+    .map((group, index) => {
+      const title = group?.title?.trim();
+      const maxSelect = Number(group?.maxSelect ?? 1);
+
+      if (!title) {
+        throw new AppError("Each add-on group needs a title", 400);
+      }
+
+      if (!Number.isFinite(maxSelect) || maxSelect < 1) {
+        throw new AppError("Add-on group max select is invalid", 400);
+      }
+
+      const items = normalizeAddonItems(group?.items, `addon-item-${index + 1}`);
+
+      if (!items.length) {
+        throw new AppError("Each add-on group needs at least one add-on item", 400);
+      }
+
+      return {
+        id: group?.id?.trim() || toEntityKey(title, `addon-group-${index + 1}`),
+        title,
+        maxSelect: Math.round(maxSelect),
+        optionalLabel: group?.optionalLabel?.trim() || "",
+        description: group?.description?.trim() || "",
+        items,
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeBundleSuggestions(payload) {
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+
+  return payload
+    .map((item, index) => {
+      const label = item?.label?.trim();
+      const priceModifier = Number(item?.priceModifier || 0);
+
+      if (!label) {
+        throw new AppError("Each bundle suggestion needs a label", 400);
+      }
+
+      if (!Number.isFinite(priceModifier) || priceModifier < 0) {
+        throw new AppError("Bundle suggestion price modifier is invalid", 400);
+      }
+
+      return {
+        id: item?.id?.trim() || toEntityKey(label, `bundle-${index + 1}`),
+        label,
+        priceModifier,
+        accent: item?.accent?.trim() || "#FFC857",
+        icon: item?.icon?.trim() || "sparkles-outline",
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeMenuItemDetail(payload) {
+  if (!payload) {
+    return {
+      image: "",
+      subtitle: "",
+      addonGroups: [],
+      bundleSuggestions: [],
+      instructionsPlaceholder: "",
+      maxInstructionsLength: 500,
+    };
+  }
+
+  const maxInstructionsLength = Number(payload.maxInstructionsLength ?? 500);
+
+  if (!Number.isFinite(maxInstructionsLength) || maxInstructionsLength < 0) {
+    throw new AppError("Instructions length is invalid", 400);
+  }
+
+  return {
+    image: payload.image?.trim() || "",
+    subtitle: payload.subtitle?.trim() || "",
+    addonGroups: normalizeAddonGroups(payload.addonGroups),
+    bundleSuggestions: normalizeBundleSuggestions(payload.bundleSuggestions),
+    instructionsPlaceholder: payload.instructionsPlaceholder?.trim() || "",
+    maxInstructionsLength: Math.round(maxInstructionsLength),
+  };
+}
+
 async function createMenuItem(ownerId, payload) {
   const restaurant = await getOwnedRestaurantDocument(ownerId);
   const nextItem = normalizeMenuItemPayload(payload);
+  const optionGroups = normalizeOptionGroups(payload.optionGroups);
+  const detail = normalizeMenuItemDetail(payload.detail);
 
   const duplicate = restaurant.menuItems.some(
     (item) => item.key === nextItem.key || item.name.toLowerCase() === nextItem.name.toLowerCase(),
@@ -580,8 +770,8 @@ async function createMenuItem(ownerId, payload) {
 
   restaurant.menuItems.push({
     ...nextItem,
-    optionGroups: [],
-    detail: null,
+    optionGroups,
+    detail,
   });
 
   if (
@@ -608,6 +798,8 @@ async function updateMenuItem(ownerId, itemKey, payload) {
   }
 
   const nextItem = normalizeMenuItemPayload(payload, targetItem.key);
+  const optionGroups = normalizeOptionGroups(payload.optionGroups);
+  const detail = normalizeMenuItemDetail(payload.detail);
 
   if (
     nextItem.category &&
@@ -624,6 +816,8 @@ async function updateMenuItem(ownerId, itemKey, payload) {
   targetItem.icon = nextItem.icon;
   targetItem.popular = nextItem.popular;
   targetItem.isActive = nextItem.isActive;
+  targetItem.optionGroups = optionGroups;
+  targetItem.detail = detail;
 
   restaurant.startingPrice =
     restaurant.menuItems.length > 0

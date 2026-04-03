@@ -23,6 +23,14 @@ function sanitizeUser(user) {
     phone: user.phone,
     role: user.role,
     deliveryTransportMode: user.deliveryTransportMode || undefined,
+    deliveryAvailability: user.deliveryAvailability
+      ? {
+          isOnline: Boolean(user.deliveryAvailability.isOnline),
+          acceptsNewOrders:
+            user.deliveryAvailability.acceptsNewOrders !== false,
+          lastSeenAt: user.deliveryAvailability.lastSeenAt?.toISOString(),
+        }
+      : undefined,
     location:
       locationParts.join(", ") || "Set your delivery location",
     loyaltyPoints: user.loyaltyPoints,

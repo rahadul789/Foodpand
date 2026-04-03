@@ -79,6 +79,53 @@ const riderLiveLocationSchema = new Schema(
   },
 );
 
+const deliveryAvailabilitySchema = new Schema(
+  {
+    isOnline: {
+      type: Boolean,
+      default: false,
+    },
+    acceptsNewOrders: {
+      type: Boolean,
+      default: true,
+    },
+    lastSeenAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
+const pushTokenSchema = new Schema(
+  {
+    token: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    platform: {
+      type: String,
+      enum: ["android", "ios"],
+      default: "android",
+    },
+    appId: {
+      type: String,
+      default: "customer-app",
+      trim: true,
+    },
+    updatedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
 const userSchema = new Schema(
   {
     name: {
@@ -124,9 +171,21 @@ const userSchema = new Schema(
       enum: ["bicycle", "motorbike", "car"],
       default: "bicycle",
     },
+    deliveryAvailability: {
+      type: deliveryAvailabilitySchema,
+      default: () => ({
+        isOnline: false,
+        acceptsNewOrders: true,
+        lastSeenAt: null,
+      }),
+    },
     liveDeliveryLocation: {
       type: riderLiveLocationSchema,
       default: null,
+    },
+    pushTokens: {
+      type: [pushTokenSchema],
+      default: [],
     },
     isActive: {
       type: Boolean,

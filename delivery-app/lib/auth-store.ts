@@ -13,6 +13,7 @@ type AuthState = {
   isHydrating: boolean;
   hasHydrated: boolean;
   authError: string;
+  setUser: (user: DeliveryUser | null) => void;
   login: (payload: { email: string; password: string }) => Promise<void>;
   logout: () => void;
   restoreSession: () => Promise<void>;
@@ -26,6 +27,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isHydrating: false,
   hasHydrated: false,
   authError: "",
+  setUser(user) {
+    set({ user });
+  },
   async login(payload) {
     set({
       isAuthenticating: true,

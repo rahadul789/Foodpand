@@ -6,11 +6,13 @@ import {
   type SignupPayload,
   getMeRequest,
   loginRequest,
+  unregisterPushTokenRequest,
   signupRequest,
 } from "@/lib/auth-api";
 import { setApiAccessToken } from "@/lib/api-client";
 
 const AUTH_TOKEN_KEY = "customer-app-auth-token";
+const PUSH_TOKEN_KEY = "customer-app-push-token";
 
 export type AuthUser = {
   id: string;
@@ -177,7 +179,27 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       };
     }),
   signOut: () => {
-    void SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
+    const accessToken = get().accessToken;
+    void (async () => {
+      const storedPushToken = await SecureStore.getItemAsync(PUSH_TOKEN_KEY);
+
+      if (accessToken && storedPushToken) {
+        try {
+          await unregisterPushTokenRequest(
+            {
+              token: storedPushToken,
+              appId: "customer-app",
+            },
+            accessToken,
+          );
+        } catch {
+          // Ignore sign-out cleanup failures and clear local session anyway.
+        }
+      }
+
+      await SecureStore.deleteItemAsync(PUSH_TOKEN_KEY);
+      await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
+    })();
     setApiAccessToken(null);
     set({
       accessToken: null,

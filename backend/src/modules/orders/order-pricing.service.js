@@ -32,6 +32,178 @@ function roundTk(value) {
   return Math.max(Math.round(Number(value) || 0), 0);
 }
 
+function uniqueStrings(values) {
+  return [...new Set((values ?? []).map((value) => String(value).trim()).filter(Boolean))];
+}
+
+function normalizeSelectedOptions(rawSelectedOptions, menuItem) {
+  const optionGroups = Array.isArray(menuItem.optionGroups) ? menuItem.optionGroups : [];
+  const selectedOptions = Array.isArray(rawSelectedOptions) ? rawSelectedOptions : [];
+  const selectedMap = new Map();
+
+  selectedOptions.forEach((entry) => {
+    const groupId = entry?.groupId?.trim();
+    const choiceId = entry?.choiceId?.trim();
+    if (!groupId || !choiceId) {
+      throw new AppError("One or more option selections are invalid.", 400);
+    }
+    selectedMap.set(groupId, choiceId);
+  });
+
+  let extraTk = 0;
+  const normalizedSelections = [];
+
+  optionGroups.forEach((group) => {
+    const choiceId = selectedMap.get(group.id);
+    const requiresSelection = Boolean(group.required) || Number(group.minSelect || 0) > 0;
+
+    if (!choiceId) {
+      if (requiresSelection) {
+        throw new AppError(`Please choose an option for ${group.title}.`, 400);
+      }
+      return;
+    }
+
+    const choice = (group.choices ?? []).find((entry) => entry.id === choiceId);
+    if (!choice) {
+      throw new AppError(`Selected option for ${group.title} is unavailable.`, 400);
+    }
+
+    extraTk += roundTk(choice.priceModifier);
+    normalizedSelections.push({
+      groupId: group.id,
+      choiceId: choice.id,
+    });
+  });
+
+  selectedMap.forEach((_choiceId, groupId) => {
+    if (!optionGroups.some((group) => group.id === groupId)) {
+      throw new AppError("One or more option groups are invalid.", 400);
+    }
+  });
+
+  return {
+    extraTk,
+    selectedOptions: normalizedSelections,
+  };
+}
+
+function normalizeSelectedAddons(rawSelectedAddons, menuItem) {
+  const addonGroups =
+    Array.isArray(menuItem.detail?.addonGroups) ? menuItem.detail.addonGroups : [];
+  const selectedAddonGroups = Array.isArray(rawSelectedAddons) ? rawSelectedAddons : [];
+
+  let extraTk = 0;
+  const normalizedSelections = selectedAddonGroups.map((entry) => {
+    const groupId = entry?.groupId?.trim();
+    if (!groupId) {
+      throw new AppError("One or more add-on groups are invalid.", 400);
+    }
+
+    const addonGroup = addonGroups.find((group) => group.id === groupId);
+    if (!addonGroup) {
+      throw new AppError("One or more add-on groups are invalid.", 400);
+    }
+
+    const itemIds = uniqueStrings(entry?.itemIds);
+    if (addonGroup.maxSelect && itemIds.length > addonGroup.maxSelect) {
+      throw new AppError(`You can select up to ${addonGroup.maxSelect} add-ons in ${addonGroup.title}.`, 400);
+    }
+
+    itemIds.forEach((itemId) => {
+      const addonItem = (addonGroup.items ?? []).find((item) => item.id === itemId);
+      if (!addonItem) {
+        throw new AppError(`One or more add-ons in ${addonGroup.title} are unavailable.`, 400);
+      }
+      extraTk += roundTk(addonItem.priceModifier);
+    });
+
+    return {
+      groupId: addonGroup.id,
+      itemIds,
+    };
+  });
+
+  return {
+    extraTk,
+    selectedAddons: normalizedSelections,
+  };
+}
+
+function normalizeSelectedBundles(rawSelectedBundleSuggestionIds, menuItem) {
+  const bundleSuggestions =
+    Array.isArray(menuItem.detail?.bundleSuggestions) ? menuItem.detail.bundleSuggestions : [];
+  const selectedBundleSuggestionIds = uniqueStrings(rawSelectedBundleSuggestionIds);
+
+  let extraTk = 0;
+  selectedBundleSuggestionIds.forEach((suggestionId) => {
+    const suggestion = bundleSuggestions.find((item) => item.id === suggestionId);
+    if (!suggestion) {
+      throw new AppError("One or more suggested pairings are unavailable.", 400);
+    }
+    extraTk += roundTk(suggestion.priceModifier);
+  });
+
+  return {
+    extraTk,
+    selectedBundleSuggestionIds,
+  };
+}
+
+function normalizeLineItemsWithPricing(lineItems, restaurant) {
+  if (!Array.isArray(lineItems) || lineItems.length === 0) {
+    throw new AppError("Add at least one item before placing the order", 400);
+  }
+
+  const menuMap = new Map((restaurant.menuItems ?? []).map((item) => [item.key, item]));
+
+  return lineItems.map((item) => {
+    const quantity = Number(item.quantity);
+    const restaurantMenuItem = menuMap.get(item.itemId);
+
+    if (!restaurantMenuItem) {
+      throw new AppError("One or more selected items are unavailable", 400);
+    }
+
+    if (!Number.isFinite(quantity) || quantity < 1) {
+      throw new AppError("Item quantity must be at least 1", 400);
+    }
+
+    const normalizedOptions = normalizeSelectedOptions(
+      item.configuration?.selectedOptions,
+      restaurantMenuItem,
+    );
+    const normalizedAddons = normalizeSelectedAddons(
+      item.configuration?.selectedAddons,
+      restaurantMenuItem,
+    );
+    const normalizedBundles = normalizeSelectedBundles(
+      item.configuration?.selectedBundleSuggestionIds,
+      restaurantMenuItem,
+    );
+
+    const unitTk = roundTk(
+      restaurantMenuItem.price +
+        normalizedOptions.extraTk +
+        normalizedAddons.extraTk +
+        normalizedBundles.extraTk,
+    );
+
+    return {
+      itemId: restaurantMenuItem.key,
+      name: restaurantMenuItem.name,
+      quantity,
+      unitTk,
+      summary: item.summary?.trim() || "",
+      configuration: {
+        selectedOptions: normalizedOptions.selectedOptions,
+        selectedAddons: normalizedAddons.selectedAddons,
+        selectedBundleSuggestionIds: normalizedBundles.selectedBundleSuggestionIds,
+      },
+    };
+  });
+}
+
 function normalizeCouponCode(code) {
   return code?.trim().toUpperCase() || "";
 }
@@ -189,4 +361,5 @@ module.exports = {
   DELIVERY_FEE_TK,
   SERVICE_FEE_TK,
   buildPricingBreakdown,
+  normalizeLineItemsWithPricing,
 };

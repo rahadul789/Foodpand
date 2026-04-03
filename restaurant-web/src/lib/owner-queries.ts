@@ -18,6 +18,7 @@ import {
   type OwnerOffer,
   type OwnerOrder,
   type OwnerRestaurant,
+  type UpsertOwnerMenuItemPayload,
   type UpdateOwnerRestaurantPayload,
   updateMyRestaurantRequest,
   updateOfferRequest,
@@ -27,6 +28,7 @@ import {
   updateOrderPreparationWindowRequest,
   updateOwnerOrderStatusRequest,
 } from "./owner-api";
+import { useToast } from "./toast";
 
 export function useMyRestaurantQuery() {
   const { token, isAuthenticated } = useAuth();
@@ -63,6 +65,7 @@ export function useMyOffersQuery() {
 export function useCreateRestaurantMutation() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
 
   return useMutation({
     mutationFn: (payload: {
@@ -74,6 +77,10 @@ export function useCreateRestaurantMutation() {
     }) => createRestaurantRequest(token as string, payload),
     onSuccess: (restaurant) => {
       queryClient.setQueryData<OwnerRestaurant>(["owner", "restaurant"], restaurant);
+      pushToast({
+        title: "Restaurant created",
+        description: "Your owner workspace is now linked to the restaurant profile.",
+      });
     },
   });
 }
@@ -81,12 +88,17 @@ export function useCreateRestaurantMutation() {
 export function useUpdateMyRestaurantMutation() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
 
   return useMutation({
     mutationFn: (payload: UpdateOwnerRestaurantPayload) =>
       updateMyRestaurantRequest(token as string, payload),
     onSuccess: (restaurant) => {
       queryClient.setQueryData<OwnerRestaurant>(["owner", "restaurant"], restaurant);
+      pushToast({
+        title: "Restaurant updated",
+        description: "Profile changes have been saved.",
+      });
     },
   });
 }
@@ -115,6 +127,7 @@ export function useMyMenuQuery() {
 export function useCreateMenuCategoryMutation() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
 
   return useMutation({
     mutationFn: (payload: { label: string; sortOrder?: number }) =>
@@ -131,6 +144,10 @@ export function useCreateMenuCategoryMutation() {
             : current,
       );
       queryClient.invalidateQueries({ queryKey: ["owner", "restaurant"] });
+      pushToast({
+        title: "Category added",
+        description: "The menu category is ready to use.",
+      });
     },
   });
 }
@@ -138,16 +155,11 @@ export function useCreateMenuCategoryMutation() {
 export function useCreateMenuItemMutation() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
 
   return useMutation({
-    mutationFn: (payload: {
-      name: string;
-      description?: string;
-      price: number;
-      category?: string;
-      popular?: boolean;
-      isActive?: boolean;
-    }) => createMenuItemRequest(token as string, payload),
+    mutationFn: (payload: UpsertOwnerMenuItemPayload) =>
+      createMenuItemRequest(token as string, payload),
     onSuccess: (result) => {
       queryClient.setQueryData<{ restaurantId: string; restaurantName: string; menuCategories: OwnerMenuCategory[]; menuItems: OwnerMenuItem[] }>(
         ["owner", "menu"],
@@ -160,6 +172,10 @@ export function useCreateMenuItemMutation() {
             : current,
       );
       queryClient.invalidateQueries({ queryKey: ["owner", "restaurant"] });
+      pushToast({
+        title: "Menu item created",
+        description: "The item is now available in your menu list.",
+      });
     },
   });
 }
@@ -167,17 +183,12 @@ export function useCreateMenuItemMutation() {
 export function useUpdateMenuItemMutation() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
 
   return useMutation({
     mutationFn: (payload: {
       itemKey: string;
-      name: string;
-      description?: string;
-      price: number;
-      category?: string;
-      popular?: boolean;
-      isActive?: boolean;
-    }) =>
+    } & UpsertOwnerMenuItemPayload) =>
       updateMenuItemRequest(token as string, payload.itemKey, payload),
     onSuccess: (result) => {
       queryClient.setQueryData<{ restaurantId: string; restaurantName: string; menuCategories: OwnerMenuCategory[]; menuItems: OwnerMenuItem[] }>(
@@ -191,6 +202,10 @@ export function useUpdateMenuItemMutation() {
             : current,
       );
       queryClient.invalidateQueries({ queryKey: ["owner", "restaurant"] });
+      pushToast({
+        title: "Menu item updated",
+        description: "The latest item changes have been saved.",
+      });
     },
   });
 }
@@ -198,11 +213,12 @@ export function useUpdateMenuItemMutation() {
 export function useToggleMenuItemStatusMutation() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
 
   return useMutation({
     mutationFn: (payload: { itemKey: string; isActive: boolean }) =>
       updateMenuItemStatusRequest(token as string, payload.itemKey, payload.isActive),
-    onSuccess: (result) => {
+    onSuccess: (result, variables) => {
       queryClient.setQueryData<{ restaurantId: string; restaurantName: string; menuCategories: OwnerMenuCategory[]; menuItems: OwnerMenuItem[] }>(
         ["owner", "menu"],
         (current) =>
@@ -214,6 +230,12 @@ export function useToggleMenuItemStatusMutation() {
             : current,
       );
       queryClient.invalidateQueries({ queryKey: ["owner", "restaurant"] });
+      pushToast({
+        title: variables.isActive ? "Menu item visible" : "Menu item hidden",
+        description: variables.isActive
+          ? "Customers can see this item again."
+          : "The item has been hidden from customers.",
+      });
     },
   });
 }
@@ -221,6 +243,7 @@ export function useToggleMenuItemStatusMutation() {
 export function useDeleteMenuItemMutation() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
 
   return useMutation({
     mutationFn: (itemKey: string) => deleteMenuItemRequest(token as string, itemKey),
@@ -236,6 +259,10 @@ export function useDeleteMenuItemMutation() {
             : current,
       );
       queryClient.invalidateQueries({ queryKey: ["owner", "restaurant"] });
+      pushToast({
+        title: "Menu item deleted",
+        description: "The item has been removed from your menu.",
+      });
     },
   });
 }
@@ -243,6 +270,7 @@ export function useDeleteMenuItemMutation() {
 export function useCreateOfferMutation() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
 
   return useMutation({
     mutationFn: (payload: Omit<OwnerOffer, "id">) =>
@@ -261,6 +289,10 @@ export function useCreateOfferMutation() {
           : current,
       );
       queryClient.invalidateQueries({ queryKey: ["owner", "restaurant"] });
+      pushToast({
+        title: "Offer created",
+        description: "The campaign is now available in your offers list.",
+      });
     },
   });
 }
@@ -268,6 +300,7 @@ export function useCreateOfferMutation() {
 export function useUpdateOfferMutation() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
 
   return useMutation({
     mutationFn: (payload: { offerId: string } & Omit<OwnerOffer, "id">) =>
@@ -286,6 +319,10 @@ export function useUpdateOfferMutation() {
           : current,
       );
       queryClient.invalidateQueries({ queryKey: ["owner", "restaurant"] });
+      pushToast({
+        title: "Offer updated",
+        description: "Campaign changes have been saved.",
+      });
     },
   });
 }
@@ -293,11 +330,12 @@ export function useUpdateOfferMutation() {
 export function useToggleOfferStatusMutation() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
 
   return useMutation({
     mutationFn: (payload: { offerId: string; isActive: boolean }) =>
       updateOfferStatusRequest(token as string, payload.offerId, payload.isActive),
-    onSuccess: (result) => {
+    onSuccess: (result, variables) => {
       queryClient.setQueryData<{
         restaurantId: string;
         restaurantName: string;
@@ -311,6 +349,12 @@ export function useToggleOfferStatusMutation() {
           : current,
       );
       queryClient.invalidateQueries({ queryKey: ["owner", "restaurant"] });
+      pushToast({
+        title: variables.isActive ? "Offer activated" : "Offer paused",
+        description: variables.isActive
+          ? "Customers can use this campaign again."
+          : "This campaign is currently paused.",
+      });
     },
   });
 }
@@ -318,6 +362,7 @@ export function useToggleOfferStatusMutation() {
 export function useDeleteOfferMutation() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
 
   return useMutation({
     mutationFn: (offerId: string) => deleteOfferRequest(token as string, offerId),
@@ -335,6 +380,10 @@ export function useDeleteOfferMutation() {
           : current,
       );
       queryClient.invalidateQueries({ queryKey: ["owner", "restaurant"] });
+      pushToast({
+        title: "Offer deleted",
+        description: "The campaign has been removed.",
+      });
     },
   });
 }
@@ -342,6 +391,7 @@ export function useDeleteOfferMutation() {
 export function useOwnerOrderStatusMutation() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
 
   return useMutation({
     mutationFn: (payload: {
@@ -363,6 +413,10 @@ export function useOwnerOrderStatusMutation() {
           order.id === updatedOrder.id ? updatedOrder : order,
         ),
       );
+      pushToast({
+        title: "Order updated",
+        description: `Order ${updatedOrder.orderCode || updatedOrder.id} is now ${updatedOrder.status}.`,
+      });
     },
   });
 }
@@ -370,6 +424,7 @@ export function useOwnerOrderStatusMutation() {
 export function useUpdatePreparationWindowMutation() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
 
   return useMutation({
     mutationFn: (payload: {
@@ -389,6 +444,10 @@ export function useUpdatePreparationWindowMutation() {
           order.id === updatedOrder.id ? updatedOrder : order,
         ),
       );
+      pushToast({
+        title: "Preparation time updated",
+        description: `Customers will now see the revised prep window for ${updatedOrder.orderCode || updatedOrder.id}.`,
+      });
     },
   });
 }
